@@ -964,9 +964,9 @@ def main():
     if not os.path.exists(args.input_video):
         raise FileNotFoundError(f"File video non trovato: {args.input_video}")
 
-    # Determina il percorso di output usando il nome del file video
+    # Determina il percorso di output: output/{nome_video}/
     video_name = Path(args.input_video).stem
-    output_folder = video_name
+    output_folder = os.path.join("output", video_name)
 
     # Ottieni informazioni sul video
     video_info = get_video_info(args.input_video)
