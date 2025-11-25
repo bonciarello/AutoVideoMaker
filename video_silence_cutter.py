@@ -10,6 +10,7 @@ import argparse
 import subprocess
 import tempfile
 import time
+import shutil
 from pathlib import Path
 from typing import List, Tuple, Dict
 import numpy as np
@@ -467,12 +468,28 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
             file_size = os.path.getsize(txt_path)
             print(f"     File TXT verificato: {file_size} bytes")
 
+    # 7. Sposta il video originale nella cartella di output
+    original_video_name = Path(video_path).name
+    destination_path = os.path.join(output_folder, original_video_name)
+
+    # Verifica se il video originale non è già nella cartella di output
+    if os.path.abspath(video_path) != os.path.abspath(destination_path):
+        print("\n" + "="*60)
+        print("--> 7. Spostamento Video Originale")
+        print("="*60)
+        print(f"📦 Spostando {original_video_name} in {output_folder}...", end='', flush=True)
+        shutil.move(video_path, destination_path)
+        print(" ✓")
+        print(f"    Video originale spostato: {destination_path}")
+
     print(f"\n{'='*60}")
     print(f"✓ Elaborazione completata!")
     print(f"{'='*60}")
     print(f"    [OK] Chunks: {chunks_dir} ({len(keep_ranges)} file)")
     print(f"    [OK] EDL: {edl_path}")
     print(f"    [OK] Video Finale: {draft}")
+    if os.path.abspath(video_path) != os.path.abspath(destination_path):
+        print(f"    [OK] Video Originale: {destination_path}")
     if save_subtitles and subtitle_segments:
         print(f"    [OK] Sottotitoli SRT: {os.path.join(output_folder, f'{name_no_ext}.srt')}")
         print(f"    [OK] Sottotitoli JSON: {os.path.join(output_folder, f'{name_no_ext}_subtitles.json')}")
