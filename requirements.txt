@@ -3,3 +3,8 @@ openai-whisper>=20230314
 imageio>=2.31.0
 psutil>=5.9.0
 json5>=0.9.0
+
+# Separazione audio (opzionale - richiesto solo se usi --clean-audio)
+demucs>=4.0.0
+torch>=2.0.0
+torchaudio>=2.0.0

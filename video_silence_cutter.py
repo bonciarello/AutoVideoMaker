@@ -209,6 +209,74 @@ def save_subtitles_txt(segments: List[Dict], output_txt: str) -> None:
     print(f"✓ Trascrizione TXT generata: {output_txt}")
 
 
+def separate_vocals(video_path: str, output_audio: str) -> bool:
+    """
+    Separa la voce dall'audio usando Demucs.
+    Ritorna True se la separazione è riuscita, False altrimenti.
+
+    :param video_path: Percorso del video originale
+    :param output_audio: Percorso dove salvare l'audio della sola voce
+    :return: True se riuscito, False altrimenti
+    """
+    try:
+        import torch
+        from demucs.pretrained import get_model
+        from demucs.apply import apply_model
+        import torchaudio
+
+        print("🎵 Separazione voce dall'audio con Demucs...")
+
+        # Estrai audio dal video in WAV temporaneo
+        temp_audio = output_audio.replace('.wav', '_temp.wav')
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", video_path,
+            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+            temp_audio
+        ]
+        subprocess.run(cmd, check=True)
+
+        # Carica modello Demucs (usa il modello leggero htdemucs)
+        print("  ⏳ Caricamento modello AI...")
+        model = get_model('htdemucs')
+        model.cpu()  # Usa CPU (cambia in .cuda() se hai GPU)
+        model.eval()
+
+        # Carica audio
+        print("  ⏳ Analisi audio...")
+        wav, sr = torchaudio.load(temp_audio)
+
+        # Resample se necessario
+        if sr != model.samplerate:
+            wav = torchaudio.functional.resample(wav, sr, model.samplerate)
+
+        # Applica modello
+        print("  ⏳ Separazione in corso (può richiedere alcuni minuti)...")
+        with torch.no_grad():
+            sources = apply_model(model, wav[None], device='cpu')
+
+        # Estrai solo la voce (stems: [drums, bass, other, vocals])
+        vocals = sources[0, 3]  # Index 3 = vocals
+
+        # Salva voce estratta
+        torchaudio.save(output_audio, vocals.cpu(), model.samplerate)
+
+        # Rimuovi file temporaneo
+        os.remove(temp_audio)
+
+        print("  ✓ Voce separata con successo!")
+        return True
+
+    except ImportError:
+        print("  ⚠️  Demucs non installato. Usa: pip install demucs")
+        print("  → Uso audio originale senza separazione")
+        return False
+    except Exception as e:
+        print(f"  ⚠️  Errore durante separazione: {e}")
+        print("  → Uso audio originale senza separazione")
+        return False
+
+
 def format_timestamp_srt(seconds: float) -> str:
     """Formatta i secondi in formato timestamp SRT (HH:MM:SS,mmm)."""
     hours = int(seconds // 3600)
@@ -291,7 +359,8 @@ def calculate_kept_segments(video_duration: float,
 def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
                       ai_cuts: List[Tuple[float, float]], video_duration: float,
                       output_folder: str, video_info: Dict = None, name_no_ext: str = None,
-                      subtitle_segments: List[Dict] = None, save_subtitles: bool = True) -> None:
+                      subtitle_segments: List[Dict] = None, save_subtitles: bool = True,
+                      clean_audio: bool = False) -> None:
     """
     Processa ed esporta il video unendo silence_cuts e ai_cuts.
 
@@ -419,18 +488,53 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     print("🔗 Concatenando segmenti...", end='', flush=True)
     draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
 
+    # Se richiesta la pulizia audio, usa un file temporaneo
+    draft_temp = draft if not clean_audio else os.path.join(output_folder, f"TEMP_{name_no_ext}.mp4")
+
     cmd_concat = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-f", "concat", "-safe", "0",
         "-i", concat_path,
         "-c", "copy",
-        draft
+        draft_temp
     ]
 
     subprocess.run(cmd_concat, check=True)
     print(" ✓")
 
-    # 6. Salva sottotitoli se disponibili
+    # Applica separazione vocale se richiesto
+    if clean_audio:
+        print("\n" + "="*60)
+        print("--> 6. Pulizia Audio (Separazione Voce)")
+        print("="*60)
+
+        # Separa la voce dall'audio
+        vocals_audio = os.path.join(output_folder, f"vocals_{name_no_ext}.wav")
+        if separate_vocals(draft_temp, vocals_audio):
+            # Sostituisci l'audio del video con solo la voce
+            print("🔄 Applicando audio pulito al video...")
+            cmd_replace = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", draft_temp,
+                "-i", vocals_audio,
+                "-map", "0:v:0",  # Video dal primo input
+                "-map", "1:a:0",  # Audio dal secondo input (voce separata)
+                "-c:v", "copy",   # Copia video senza re-encoding
+                "-c:a", "aac",    # Converti audio in AAC
+                "-b:a", "192k",   # Bitrate audio
+                draft
+            ]
+            subprocess.run(cmd_replace, check=True)
+
+            # Rimuovi file temporanei
+            os.remove(draft_temp)
+            os.remove(vocals_audio)
+            print("  ✓ Audio pulito applicato al video finale!")
+        else:
+            # Se la separazione fallisce, usa il video temporaneo come finale
+            os.rename(draft_temp, draft)
+
+    # 7. Salva sottotitoli se disponibili
     if save_subtitles and subtitle_segments:
         print("\n" + "="*60)
         print("--> 6. Salvataggio Sottotitoli")
@@ -560,6 +664,8 @@ def main():
     parser.add_argument('--whisper-model', type=str, default='medium',
                        choices=['tiny', 'base', 'small', 'medium', 'large'],
                        help='Modello Whisper per i sottotitoli (default: medium)')
+    parser.add_argument('--clean-audio', action='store_true',
+                       help='Separa e usa solo la voce nel video finale (richiede Demucs)')
 
     args = parser.parse_args()
 
@@ -636,7 +742,8 @@ def main():
             video_info=video_info,
             name_no_ext=name_no_ext,
             subtitle_segments=subtitle_segments,
-            save_subtitles=True
+            save_subtitles=True,
+            clean_audio=args.clean_audio
         )
 
 
