@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script unificato per Video Silence Cutter
+# Script unificato per Video Silence Cutter + AI Metadata Generator
 # Setup automatico al primo avvio, poi esecuzione rapida
 
 set -e  # Esci in caso di errore
@@ -15,6 +15,13 @@ NC='\033[0m' # No Color
 # Directory dello script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
+
+# Carica variabili ambiente da .env se esiste
+if [ -f ".env" ]; then
+    echo -e "${BLUE}📄 Caricamento configurazione da .env...${NC}"
+    export $(grep -v '^#' .env | xargs)
+    echo -e "${GREEN}✓ Configurazione caricata${NC}\n"
+fi
 
 # Funzione per il setup iniziale
 setup_environment() {
@@ -85,25 +92,142 @@ source venv/bin/activate
 # Se non ci sono argomenti, mostra l'help
 if [ $# -eq 0 ]; then
     echo -e "${BLUE}============================================================${NC}"
-    echo -e "${BLUE}     Video Silence Cutter${NC}"
+    echo -e "${BLUE}     Video Silence Cutter + AI Metadata Generator${NC}"
     echo -e "${BLUE}============================================================${NC}\n"
     echo -e "${YELLOW}Uso:${NC}"
     echo -e "  ./run.sh <video.mp4> [opzioni]"
     echo ""
     echo -e "${YELLOW}Esempi:${NC}"
-    echo -e "  ${GREEN}./run.sh video.mp4${NC}                                  # Formato CCP"
-    echo -e "  ${GREEN}./run.sh video.mp4 --format video${NC}                   # Formato video"
-    echo -e "  ${GREEN}./run.sh video.mp4 --format total${NC}                   # CCP + video"
-    echo -e "  ${GREEN}./run.sh video.mp4 -o output.mp4${NC}"
-    echo -e "  ${GREEN}./run.sh video.mp4 --silence-thresh -35dB${NC}"
-    echo -e "  ${GREEN}./run.sh video.mp4 --silence-duration 0.7${NC}"
-    echo -e "  ${GREEN}./run.sh video.mp4 --no-subtitles${NC}"
+    echo -e "  ${GREEN}./run.sh video.mp4${NC}                                  # Processing completo + metadati AI"
+    echo -e "  ${GREEN}./run.sh video.mp4 --whisper-model large${NC}            # Con modello Whisper large"
+    echo -e "  ${GREEN}./run.sh video.mp4 -t -35 -d 0.7${NC}                    # Soglia e durata silenzi custom"
+    echo ""
+    echo -e "${YELLOW}Features:${NC}"
+    echo -e "  • Rilevamento e taglio automatico dei silenzi"
+    echo -e "  • Generazione sottotitoli con Whisper AI"
+    echo -e "  • Pulizia audio con Demucs (solo voce)"
+    echo -e "  • Export chunks, EDL, video finale"
+    echo -e "  • Generazione automatica metadati con Google Gemini AI"
+    echo ""
+    echo -e "${YELLOW}Configurazione:${NC}"
+    echo -e "  • Crea file .env (copia da .env.example)"
+    echo -e "  • Aggiungi: GEMINI_API_KEY=your-key-here"
     echo ""
     echo -e "${YELLOW}Opzioni disponibili:${NC}"
     python video_silence_cutter.py --help
     exit 0
 fi
 
-# Avvia il programma con tutti gli argomenti
-echo -e "${GREEN}Avvio Video Silence Cutter...${NC}\n"
+# Estrai il file video dal primo argomento
+VIDEO_FILE="$1"
+
+# Verifica che il video esista
+if [ ! -f "$VIDEO_FILE" ]; then
+    echo -e "${RED}❌ Errore: File non trovato: $VIDEO_FILE${NC}"
+    exit 1
+fi
+
+# Estrai nome del video (senza estensione)
+VIDEO_NAME=$(basename "$VIDEO_FILE" | sed 's/\.[^.]*$//')
+OUTPUT_DIR="output/${VIDEO_NAME}"
+
+echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║         Video Processing + AI Metadata Generator              ║${NC}"
+echo -e "${BLUE}║                                                                ║${NC}"
+echo -e "${BLUE}║  1. Taglia silenzi dal video                                   ║${NC}"
+echo -e "${BLUE}║  2. Genera sottotitoli con Whisper                             ║${NC}"
+echo -e "${BLUE}║  3. Pulisce audio (solo voce)                                  ║${NC}"
+echo -e "${BLUE}║  4. Genera metadati con Google Gemini AI                       ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "${YELLOW}📹 Video: $VIDEO_FILE${NC}"
+echo -e "${YELLOW}📁 Output: $OUTPUT_DIR${NC}"
+echo ""
+
+# STEP 1: Processa il video
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}STEP 1/2: Processing Video${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
 python video_silence_cutter.py "$@"
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Errore durante il processing del video${NC}"
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}✅ Video processato con successo!${NC}"
+echo ""
+
+# STEP 2: Genera metadati AI (se API key presente)
+if [ -n "$GEMINI_API_KEY" ]; then
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}STEP 2/2: Generazione Metadati AI${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    TRANSCRIPT_FILE="${OUTPUT_DIR}/${VIDEO_NAME}_tagliato_transcript.txt"
+
+    if [ ! -f "$TRANSCRIPT_FILE" ]; then
+        echo -e "${RED}❌ Errore: Trascrizione non trovata: $TRANSCRIPT_FILE${NC}"
+        exit 1
+    fi
+
+    python generate_video_metadata.py "$TRANSCRIPT_FILE" --api-key "$GEMINI_API_KEY"
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Errore durante la generazione dei metadati${NC}"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}✅ Metadati generati con successo!${NC}"
+else
+    echo -e "${YELLOW}⚠️  Chiave API Gemini non trovata, skip generazione metadati${NC}"
+    echo -e "${YELLOW}   Per generare metadati, crea un file .env con:${NC}"
+    echo -e "${YELLOW}     GEMINI_API_KEY=your-key-here${NC}"
+fi
+
+# Riepilogo finale
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}✅ COMPLETATO!${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${GREEN}📂 File generati in: ${OUTPUT_DIR}/${NC}"
+echo ""
+echo "   📹 Video finale:"
+echo "      └─ FINAL_${VIDEO_NAME}_tagliato.mp4"
+echo ""
+echo "   📄 Sottotitoli:"
+echo "      ├─ ${VIDEO_NAME}_tagliato.srt"
+echo "      ├─ ${VIDEO_NAME}_tagliato_subtitles.json"
+echo "      └─ ${VIDEO_NAME}_tagliato_transcript.txt"
+echo ""
+
+if [ -n "$GEMINI_API_KEY" ]; then
+    echo "   🤖 Metadati AI:"
+    echo "      └─ ${VIDEO_NAME}_tagliato_metadata.txt"
+    echo ""
+fi
+
+echo "   🎬 Chunks (segmenti):"
+echo "      └─ chunks/"
+echo ""
+echo "   🎞️  EDL (Premiere Pro):"
+echo "      └─ ${VIDEO_NAME}_tagliato.edl"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+if [ -n "$GEMINI_API_KEY" ]; then
+    echo ""
+    echo -e "${YELLOW}💡 Prossimi passi:${NC}"
+    echo ""
+    echo "   1. Apri: ${OUTPUT_DIR}/${VIDEO_NAME}_tagliato_metadata.txt"
+    echo "   2. Copia il 'PROMPT IMMAGINE DI COPERTINA'"
+    echo "   3. Genera copertina su: https://stablediffusionweb.com"
+    echo "   4. Usa titolo e descrizione per pubblicare il video"
+    echo ""
+fi

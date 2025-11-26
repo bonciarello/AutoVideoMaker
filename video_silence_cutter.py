@@ -91,13 +91,13 @@ def analyze_audio_silence(audio_path: str, silence_threshold_db: float = -40,
     return silence_intervals
 
 
-def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_per_segment: int = 4, model_size: str = "medium") -> List[Dict]:
+def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_per_segment: int = 3, model_size: str = "medium") -> List[Dict]:
     """
     Genera sottotitoli usando Whisper con segmenti di N parole.
 
     :param video_path: Percorso del video
     :param output_srt: Percorso output SRT (opzionale, per file temporaneo)
-    :param words_per_segment: Numero di parole per segmento (default: 4)
+    :param words_per_segment: Numero di parole per segmento per l'analisi silenzi (default: 3)
     :param model_size: Dimensione del modello Whisper (tiny, base, small, medium, large, default: medium)
     :return: Lista di segmenti sottotitoli
     """
@@ -177,6 +177,41 @@ def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_pe
     except ImportError:
         print("ATTENZIONE: openai-whisper non è installato. Installalo con: pip install openai-whisper")
         return []
+
+
+def resegment_subtitles(segments: List[Dict], words_per_segment: int = 8) -> List[Dict]:
+    """
+    Ri-segmenta i sottotitoli raggruppando più parole insieme.
+
+    :param segments: Lista di segmenti originali (con 3 parole)
+    :param words_per_segment: Numero di parole per il nuovo segmento (default: 8)
+    :return: Lista di segmenti ri-segmentati
+    """
+    if not segments:
+        return []
+
+    # Unisci tutti i segmenti e conta le parole
+    all_words = []
+    for seg in segments:
+        words = seg['text'].split()
+        for word in words:
+            all_words.append({
+                'word': word,
+                'time': seg['start'] + (seg['end'] - seg['start']) * (words.index(word) / max(len(words), 1))
+            })
+
+    # Ri-segmenta in gruppi di N parole
+    new_segments = []
+    for i in range(0, len(all_words), words_per_segment):
+        word_group = all_words[i:i + words_per_segment]
+        if word_group:
+            new_segments.append({
+                'start': word_group[0]['time'],
+                'end': word_group[-1]['time'] + 0.5,  # Aggiungi 0.5s alla fine
+                'text': ' '.join([w['word'] for w in word_group])
+            })
+
+    return new_segments
 
 
 def save_subtitles_json(segments: List[Dict], output_json: str, video_path: str = None) -> None:
@@ -540,10 +575,14 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
         print("--> 6. Salvataggio Sottotitoli")
         print("="*60)
 
+        # Ri-segmenta i sottotitoli a 8 parole per l'esportazione
+        print("  📝 Ri-segmentazione sottotitoli per export (8 parole per segmento)...")
+        export_segments = resegment_subtitles(subtitle_segments, words_per_segment=8)
+
         # Salva in formato SRT
         srt_path = os.path.join(output_folder, f"{name_no_ext}.srt")
         with open(srt_path, 'w', encoding='utf-8') as f:
-            for i, segment in enumerate(subtitle_segments, 1):
+            for i, segment in enumerate(export_segments, 1):
                 f.write(f"{i}\n")
                 f.write(f"{format_timestamp_srt(segment['start'])} --> {format_timestamp_srt(segment['end'])}\n")
                 f.write(f"{segment['text']}\n\n")
@@ -556,7 +595,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
 
         # Salva in formato JSON
         json_path = os.path.join(output_folder, f"{name_no_ext}_subtitles.json")
-        save_subtitles_json(subtitle_segments, json_path, video_path)
+        save_subtitles_json(export_segments, json_path, video_path)
 
         # Verifica che il file esista
         if os.path.exists(json_path):
@@ -565,7 +604,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
 
         # Salva in formato TXT
         txt_path = os.path.join(output_folder, f"{name_no_ext}_transcript.txt")
-        save_subtitles_txt(subtitle_segments, txt_path)
+        save_subtitles_txt(export_segments, txt_path)
 
         # Verifica che il file esista
         if os.path.exists(txt_path):
@@ -664,8 +703,8 @@ def main():
     parser.add_argument('--whisper-model', type=str, default='medium',
                        choices=['tiny', 'base', 'small', 'medium', 'large'],
                        help='Modello Whisper per i sottotitoli (default: medium)')
-    parser.add_argument('--clean-audio', action='store_true',
-                       help='Separa e usa solo la voce nel video finale (richiede Demucs)')
+    parser.add_argument('--words-per-segment', type=int, default=3,
+                       help='Numero di parole per segmento per analisi silenzi (default: 3)')
 
     args = parser.parse_args()
 
@@ -711,7 +750,12 @@ def main():
         )
 
         # Genera sottotitoli
-        subtitle_segments = generate_subtitles_whisper(args.input_video, srt_path, model_size=args.whisper_model)
+        subtitle_segments = generate_subtitles_whisper(
+            args.input_video,
+            srt_path,
+            words_per_segment=args.words_per_segment,
+            model_size=args.whisper_model
+        )
 
         # Unisci intervalli di silenzio
         merged_silence = merge_silence_intervals(
@@ -743,7 +787,7 @@ def main():
             name_no_ext=name_no_ext,
             subtitle_segments=subtitle_segments,
             save_subtitles=True,
-            clean_audio=args.clean_audio
+            clean_audio=True  # Sempre attiva la pulizia audio
         )
 
 
