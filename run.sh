@@ -104,8 +104,8 @@ if [ $# -eq 0 ]; then
     echo ""
     echo -e "${YELLOW}Features:${NC}"
     echo -e "  • Rilevamento e taglio automatico dei silenzi"
+    echo -e "  • Separazione vocale AI per migliore precisione"
     echo -e "  • Generazione sottotitoli con Whisper AI"
-    echo -e "  • Pulizia audio con Demucs (solo voce)"
     echo -e "  • Export chunks, EDL, video finale"
     echo -e "  • Generazione automatica metadati con Google Gemini AI"
     echo ""
@@ -136,8 +136,7 @@ echo -e "${BLUE}║         Video Processing + AI Metadata Generator            
 echo -e "${BLUE}║                                                                ║${NC}"
 echo -e "${BLUE}║  1. Taglia silenzi dal video                                   ║${NC}"
 echo -e "${BLUE}║  2. Genera sottotitoli con Whisper                             ║${NC}"
-echo -e "${BLUE}║  3. Pulisce audio (solo voce)                                  ║${NC}"
-echo -e "${BLUE}║  4. Genera metadati con Google Gemini AI                       ║${NC}"
+echo -e "${BLUE}║  3. Genera metadati con Google Gemini AI                       ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${YELLOW}📹 Video: $VIDEO_FILE${NC}"
@@ -209,7 +208,8 @@ echo ""
 
 if [ -n "$GEMINI_API_KEY" ]; then
     echo "   🤖 Metadati AI:"
-    echo "      └─ ${VIDEO_NAME}_tagliato_metadata.txt"
+    echo "      ├─ ${VIDEO_NAME}_tagliato_metadata.txt"
+    echo "      └─ ${VIDEO_NAME}_tagliato_thumbnail.png (1920x1080)"
     echo ""
 fi
 
@@ -219,15 +219,3 @@ echo ""
 echo "   🎞️  EDL (Premiere Pro):"
 echo "      └─ ${VIDEO_NAME}_tagliato.edl"
 echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-if [ -n "$GEMINI_API_KEY" ]; then
-    echo ""
-    echo -e "${YELLOW}💡 Prossimi passi:${NC}"
-    echo ""
-    echo "   1. Apri: ${OUTPUT_DIR}/${VIDEO_NAME}_tagliato_metadata.txt"
-    echo "   2. Copia il 'PROMPT IMMAGINE DI COPERTINA'"
-    echo "   3. Genera copertina su: https://stablediffusionweb.com"
-    echo "   4. Usa titolo e descrizione per pubblicare il video"
-    echo ""
-fi

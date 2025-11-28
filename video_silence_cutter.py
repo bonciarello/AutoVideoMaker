@@ -26,35 +26,156 @@ def check_dependencies():
         raise RuntimeError("ffmpeg non è installato. Installalo con: brew install ffmpeg (macOS) o apt-get install ffmpeg (Linux)")
 
 
-def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = True) -> None:
-    """Estrae l'audio dal video con riduzione del rumore opzionale."""
-    if noise_reduction:
-        print("🎵 Estraendo e ripulendo audio...", end='', flush=True)
-        # Filtro audio complesso per ridurre il rumore di fondo
-        audio_filter = (
-            "highpass=f=200,"           # Rimuove rumori bassi (< 200Hz)
-            "lowpass=f=3000,"            # Rimuove rumori alti (> 3000Hz) - mantiene voce umana
-            "afftdn=nf=-25,"             # FFT denoiser - riduce rumore
-            "anlmdn=s=0.00001:p=0.002:r=0.002,"  # Non-local means denoiser
-            "loudnorm"                   # Normalizza il volume
-        )
-    else:
-        print("🎵 Estraendo audio...", end='', flush=True)
-        audio_filter = None
+def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = True, separate_vocals: bool = True) -> str:
+    """
+    Estrae l'audio dal video con separazione vocale opzionale.
 
-    cmd = [
-        'ffmpeg', '-i', video_path,
-        '-vn', '-acodec', 'pcm_s16le',
-        '-ar', '16000', '-ac', '1'
-    ]
+    :param video_path: Percorso del video
+    :param output_audio: Percorso output audio WAV per analisi
+    :param noise_reduction: Applica filtri di riduzione rumore FFmpeg (deprecato, usa separate_vocals)
+    :param separate_vocals: Separa i vocals dal resto usando AI (consigliato)
+    :return: Percorso del file vocals completo per il video finale (o None se non separato)
+    """
+    vocals_full_path = None
 
-    if audio_filter:
-        cmd.extend(['-af', audio_filter])
+    if separate_vocals:
+        try:
+            from audio_separator.separator import Separator
+            import sys
+            import io
 
-    cmd.extend(['-y', output_audio])
+            print("🎵 Estraendo audio dal video...", end='', flush=True)
+            # Prima estrai l'audio grezzo in un file temporaneo
+            temp_audio = output_audio.replace('.wav', '_temp.wav')
+            subprocess.run([
+                'ffmpeg', '-i', video_path,
+                '-vn', '-acodec', 'pcm_s16le',
+                '-ar', '44100',  # Usa sample rate più alto per audio-separator
+                '-ac', '2',       # Stereo per migliore separazione
+                '-y',
+                temp_audio
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            print(" ✓")
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-    print(" ✓")
+            print("🎤 Separando vocals dal rumore di fondo con AI...", end='', flush=True)
+
+            # Nascondi i log di audio-separator
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+
+            try:
+                # Inizializza audio-separator
+                separator = Separator()
+
+                # Carica il modello MDX-Net (veloce e preciso)
+                separator.load_model(model_filename='UVR-MDX-NET-Inst_HQ_3.onnx')
+
+                # Separa l'audio (crea due file: Vocals e Instrumental)
+                output_files = separator.separate(temp_audio)
+            finally:
+                # Ripristina stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+
+            print(" ✓")
+
+            # Trova il file Vocals
+            vocals_file = None
+            for file in output_files:
+                if 'Vocals' in file or 'vocals' in file:
+                    vocals_file = file
+                    break
+
+            if vocals_file and os.path.exists(vocals_file):
+                # Salva il file vocals completo per il video finale (alta qualità)
+                vocals_full_path = output_audio.replace('.wav', '_vocals_full.wav')
+                subprocess.run([
+                    'ffmpeg', '-i', vocals_file,
+                    '-acodec', 'pcm_s16le',
+                    '-ar', '44100',  # Alta qualità per video finale
+                    '-ac', '2',       # Stereo
+                    '-y',
+                    vocals_full_path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+                # Converti il file vocals al formato per analisi (16kHz mono)
+                print("🔊 Ottimizzando audio vocals per analisi...", end='', flush=True)
+                subprocess.run([
+                    'ffmpeg', '-i', vocals_file,
+                    '-acodec', 'pcm_s16le',
+                    '-ar', '16000',  # Sample rate per analisi silenzi
+                    '-ac', '1',       # Mono
+                    '-y',
+                    output_audio
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                print(" ✓")
+
+                # Pulisci file temporanei
+                if os.path.exists(temp_audio):
+                    os.remove(temp_audio)
+                if os.path.exists(vocals_file):
+                    os.remove(vocals_file)
+                # Rimuovi anche il file instrumental se esiste
+                instrumental_file = vocals_file.replace('Vocals', 'Instrumental').replace('vocals', 'instrumental')
+                if os.path.exists(instrumental_file):
+                    os.remove(instrumental_file)
+            else:
+                print(" ⚠️  Fallback a estrazione standard")
+                # Fallback: usa il file temporaneo convertito
+                subprocess.run([
+                    'ffmpeg', '-i', temp_audio,
+                    '-acodec', 'pcm_s16le',
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-y',
+                    output_audio
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                if os.path.exists(temp_audio):
+                    os.remove(temp_audio)
+
+        except ImportError:
+            print("\n⚠️  audio-separator non installato, uso estrazione standard")
+            print("   Installa con: pip install audio-separator")
+            # Fallback a estrazione standard
+            separate_vocals = False
+        except Exception as e:
+            print(f"\n⚠️  Errore durante separazione vocals: {e}")
+            print("   Fallback a estrazione standard")
+            separate_vocals = False
+
+    # Fallback o metodo standard senza separazione vocals
+    if not separate_vocals:
+        if noise_reduction:
+            print("🎵 Estraendo e ripulendo audio...", end='', flush=True)
+            # Filtro audio complesso per ridurre il rumore di fondo
+            audio_filter = (
+                "highpass=f=200,"           # Rimuove rumori bassi (< 200Hz)
+                "lowpass=f=3000,"            # Rimuove rumori alti (> 3000Hz) - mantiene voce umana
+                "afftdn=nf=-25,"             # FFT denoiser - riduce rumore
+                "anlmdn=s=0.00001:p=0.002:r=0.002,"  # Non-local means denoiser
+                "loudnorm"                   # Normalizza il volume
+            )
+        else:
+            print("🎵 Estraendo audio...", end='', flush=True)
+            audio_filter = None
+
+        cmd = [
+            'ffmpeg', '-i', video_path,
+            '-vn', '-acodec', 'pcm_s16le',
+            '-ar', '16000', '-ac', '1'
+        ]
+
+        if audio_filter:
+            cmd.extend(['-af', audio_filter])
+
+        cmd.extend(['-y', output_audio])
+
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        print(" ✓")
+
+    return vocals_full_path
 
 
 def analyze_audio_silence(audio_path: str, silence_threshold_db: float = -40,
@@ -244,74 +365,6 @@ def save_subtitles_txt(segments: List[Dict], output_txt: str) -> None:
     print(f"✓ Trascrizione TXT generata: {output_txt}")
 
 
-def separate_vocals(video_path: str, output_audio: str) -> bool:
-    """
-    Separa la voce dall'audio usando Demucs.
-    Ritorna True se la separazione è riuscita, False altrimenti.
-
-    :param video_path: Percorso del video originale
-    :param output_audio: Percorso dove salvare l'audio della sola voce
-    :return: True se riuscito, False altrimenti
-    """
-    try:
-        import torch
-        from demucs.pretrained import get_model
-        from demucs.apply import apply_model
-        import torchaudio
-
-        print("🎵 Separazione voce dall'audio con Demucs...")
-
-        # Estrai audio dal video in WAV temporaneo
-        temp_audio = output_audio.replace('.wav', '_temp.wav')
-        cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", video_path,
-            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
-            temp_audio
-        ]
-        subprocess.run(cmd, check=True)
-
-        # Carica modello Demucs (usa il modello leggero htdemucs)
-        print("  ⏳ Caricamento modello AI...")
-        model = get_model('htdemucs')
-        model.cpu()  # Usa CPU (cambia in .cuda() se hai GPU)
-        model.eval()
-
-        # Carica audio
-        print("  ⏳ Analisi audio...")
-        wav, sr = torchaudio.load(temp_audio)
-
-        # Resample se necessario
-        if sr != model.samplerate:
-            wav = torchaudio.functional.resample(wav, sr, model.samplerate)
-
-        # Applica modello
-        print("  ⏳ Separazione in corso (può richiedere alcuni minuti)...")
-        with torch.no_grad():
-            sources = apply_model(model, wav[None], device='cpu')
-
-        # Estrai solo la voce (stems: [drums, bass, other, vocals])
-        vocals = sources[0, 3]  # Index 3 = vocals
-
-        # Salva voce estratta
-        torchaudio.save(output_audio, vocals.cpu(), model.samplerate)
-
-        # Rimuovi file temporaneo
-        os.remove(temp_audio)
-
-        print("  ✓ Voce separata con successo!")
-        return True
-
-    except ImportError:
-        print("  ⚠️  Demucs non installato. Usa: pip install demucs")
-        print("  → Uso audio originale senza separazione")
-        return False
-    except Exception as e:
-        print(f"  ⚠️  Errore durante separazione: {e}")
-        print("  → Uso audio originale senza separazione")
-        return False
-
-
 def format_timestamp_srt(seconds: float) -> str:
     """Formatta i secondi in formato timestamp SRT (HH:MM:SS,mmm)."""
     hours = int(seconds // 3600)
@@ -395,7 +448,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
                       ai_cuts: List[Tuple[float, float]], video_duration: float,
                       output_folder: str, video_info: Dict = None, name_no_ext: str = None,
                       subtitle_segments: List[Dict] = None, save_subtitles: bool = True,
-                      clean_audio: bool = False) -> None:
+                      vocals_audio_path: str = None) -> None:
     """
     Processa ed esporta il video unendo silence_cuts e ai_cuts.
 
@@ -520,54 +573,60 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     print()  # Nuova riga
 
     # Concatena i segmenti
-    print("🔗 Concatenando segmenti...", end='', flush=True)
-    draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
+    if vocals_audio_path and os.path.exists(vocals_audio_path):
+        print("🔗 Concatenando segmenti con audio vocals...", end='', flush=True)
 
-    # Se richiesta la pulizia audio, usa un file temporaneo
-    draft_temp = draft if not clean_audio else os.path.join(output_folder, f"TEMP_{name_no_ext}.mp4")
+        # Prima concatena solo il video senza audio
+        draft_no_audio = os.path.join(output_folder, f"FINAL_{name_no_ext}_no_audio.mp4")
+        cmd_concat_video = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_path,
+            "-c", "copy",
+            "-an",  # Rimuovi audio
+            draft_no_audio
+        ]
+        subprocess.run(cmd_concat_video, check=True)
 
-    cmd_concat = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "concat", "-safe", "0",
-        "-i", concat_path,
-        "-c", "copy",
-        draft_temp
-    ]
+        # Poi combina il video con l'audio vocals
+        draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
+        cmd_merge_audio = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", draft_no_audio,
+            "-i", vocals_audio_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",  # Taglia al video più corto
+            draft
+        ]
+        subprocess.run(cmd_merge_audio, check=True)
 
-    subprocess.run(cmd_concat, check=True)
-    print(" ✓")
+        # Rimuovi il file temporaneo senza audio
+        if os.path.exists(draft_no_audio):
+            os.remove(draft_no_audio)
 
-    # Applica separazione vocale se richiesto
-    if clean_audio:
-        print("\n" + "="*60)
-        print("--> 6. Pulizia Audio (Separazione Voce)")
-        print("="*60)
+        print(" ✓")
+    else:
+        print("🔗 Concatenando segmenti...", end='', flush=True)
+        draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
 
-        # Separa la voce dall'audio
-        vocals_audio = os.path.join(output_folder, f"vocals_{name_no_ext}.wav")
-        if separate_vocals(draft_temp, vocals_audio):
-            # Sostituisci l'audio del video con solo la voce
-            print("🔄 Applicando audio pulito al video...")
-            cmd_replace = [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", draft_temp,
-                "-i", vocals_audio,
-                "-map", "0:v:0",  # Video dal primo input
-                "-map", "1:a:0",  # Audio dal secondo input (voce separata)
-                "-c:v", "copy",   # Copia video senza re-encoding
-                "-c:a", "aac",    # Converti audio in AAC
-                "-b:a", "192k",   # Bitrate audio
-                draft
-            ]
-            subprocess.run(cmd_replace, check=True)
+        cmd_concat = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_path,
+            "-c", "copy",
+            draft
+        ]
 
-            # Rimuovi file temporanei
-            os.remove(draft_temp)
-            os.remove(vocals_audio)
-            print("  ✓ Audio pulito applicato al video finale!")
-        else:
-            # Se la separazione fallisce, usa il video temporaneo come finale
-            os.rename(draft_temp, draft)
+        subprocess.run(cmd_concat, check=True)
+        print(" ✓")
+
+    # Rimuovi il file FINAL e concat_list.txt
+    if os.path.exists(draft):
+        os.remove(draft)
+    if os.path.exists(concat_path):
+        os.remove(concat_path)
 
     # 7. Salva sottotitoli se disponibili
     if save_subtitles and subtitle_segments:
@@ -580,7 +639,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
         export_segments = resegment_subtitles(subtitle_segments, words_per_segment=8)
 
         # Salva in formato SRT
-        srt_path = os.path.join(output_folder, f"{name_no_ext}.srt")
+        srt_path = os.path.join(output_folder, "subtitles.srt")
         with open(srt_path, 'w', encoding='utf-8') as f:
             for i, segment in enumerate(export_segments, 1):
                 f.write(f"{i}\n")
@@ -594,7 +653,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
             print(f"     File SRT verificato: {file_size} bytes")
 
         # Salva in formato JSON
-        json_path = os.path.join(output_folder, f"{name_no_ext}_subtitles.json")
+        json_path = os.path.join(output_folder, "subtitles.json")
         save_subtitles_json(export_segments, json_path, video_path)
 
         # Verifica che il file esista
@@ -603,7 +662,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
             print(f"     File JSON verificato: {file_size} bytes")
 
         # Salva in formato TXT
-        txt_path = os.path.join(output_folder, f"{name_no_ext}_transcript.txt")
+        txt_path = os.path.join(output_folder, "transcript.txt")
         save_subtitles_txt(export_segments, txt_path)
 
         # Verifica che il file esista
@@ -628,15 +687,14 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     print(f"\n{'='*60}")
     print(f"✓ Elaborazione completata!")
     print(f"{'='*60}")
-    print(f"    [OK] Chunks: {chunks_dir} ({len(keep_ranges)} file)")
-    print(f"    [OK] EDL: {edl_path}")
-    print(f"    [OK] Video Finale: {draft}")
+    print(f"    [OK] {chunks_dir} ({len(keep_ranges)} file)")
+    print(f"    [OK] {edl_path}")
     if os.path.abspath(video_path) != os.path.abspath(destination_path):
-        print(f"    [OK] Video Originale: {destination_path}")
+        print(f"    [OK] {destination_path}")
     if save_subtitles and subtitle_segments:
-        print(f"    [OK] Sottotitoli SRT: {os.path.join(output_folder, f'{name_no_ext}.srt')}")
-        print(f"    [OK] Sottotitoli JSON: {os.path.join(output_folder, f'{name_no_ext}_subtitles.json')}")
-        print(f"    [OK] Trascrizione TXT: {os.path.join(output_folder, f'{name_no_ext}_transcript.txt')}")
+        print(f"    [OK] {os.path.join(output_folder, 'subtitles.srt')}")
+        print(f"    [OK] {os.path.join(output_folder, 'subtitles.json')}")
+        print(f"    [OK] {os.path.join(output_folder, 'transcript.txt')}")
     print(f"{'='*60}\n")
 
 
@@ -734,13 +792,16 @@ def main():
     print(f"Modello Whisper: {args.whisper_model}")
     print(f"{'='*60}\n")
 
+    # Crea cartella di output prima
+    os.makedirs(output_folder, exist_ok=True)
+
     # Crea directory temporanea
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, 'audio.wav')
         srt_path = os.path.join(tmpdir, 'subtitles.srt')
 
-        # Estrai audio con riduzione rumore (sempre attiva)
-        extract_audio(args.input_video, audio_path, noise_reduction=True)
+        # Estrai audio con separazione vocale (mantieni vocals solo in tmpdir)
+        vocals_full_path = extract_audio(args.input_video, audio_path, noise_reduction=True, separate_vocals=True)
 
         # Analizza silenzi
         silence_intervals = analyze_audio_silence(
@@ -773,9 +834,6 @@ def main():
         # Determina nome base per i file
         name_no_ext = Path(args.input_video).stem + "_tagliato"
 
-        # Crea cartella di output
-        os.makedirs(output_folder, exist_ok=True)
-
         # Usa process_and_export per generare tutto
         process_and_export(
             video_path=args.input_video,
@@ -787,7 +845,7 @@ def main():
             name_no_ext=name_no_ext,
             subtitle_segments=subtitle_segments,
             save_subtitles=True,
-            clean_audio=True  # Sempre attiva la pulizia audio
+            vocals_audio_path=vocals_full_path
         )
 
 

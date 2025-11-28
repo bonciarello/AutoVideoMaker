@@ -46,6 +46,8 @@ env/
 *.edl
 *.json
 *.txt
+*.psd
+*.png
 
 # Environment variables (API keys)
 .env
