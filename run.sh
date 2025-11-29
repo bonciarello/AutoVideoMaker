@@ -167,7 +167,7 @@ if [ -n "$GEMINI_API_KEY" ]; then
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
-    TRANSCRIPT_FILE="${OUTPUT_DIR}/${VIDEO_NAME}_tagliato_transcript.txt"
+    TRANSCRIPT_FILE="${OUTPUT_DIR}/transcript.txt"
 
     if [ ! -f "$TRANSCRIPT_FILE" ]; then
         echo -e "${RED}❌ Errore: Trascrizione non trovata: $TRANSCRIPT_FILE${NC}"

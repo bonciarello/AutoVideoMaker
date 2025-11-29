@@ -521,7 +521,7 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     os.makedirs(chunks_dir, exist_ok=True)
 
     # 4. Genera EDL per Premiere Pro
-    edl_path = os.path.join(output_folder, f"{name_no_ext}.edl")
+    edl_path = os.path.join(output_folder, "premiere_pro.edl")
     generate_edl(keep_ranges, video_path, edl_path, video_info)
 
     # 5. Genera Video Bozza
