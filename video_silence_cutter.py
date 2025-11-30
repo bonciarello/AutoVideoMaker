@@ -9,13 +9,25 @@ import json
 import argparse
 import subprocess
 import tempfile
-import time
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import numpy as np
 from datetime import datetime
 import uuid
+
+# Tenta di importare dotenv per caricare il file .env
+try:
+    from dotenv import load_dotenv
+    DOTENV_AVAILABLE = True
+except ImportError:
+    DOTENV_AVAILABLE = False
+
+
+# Logger per le fasi
+def log_phase(phase_name):
+    """Stampa il nome della fase corrente"""
+    print(f"\n[{phase_name}]")
 
 
 def check_dependencies():
@@ -44,7 +56,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
             import sys
             import io
 
-            print("🎵 Estraendo audio dal video...", end='', flush=True)
+            print("Estraendo audio dal video...", end='', flush=True)
             # Prima estrai l'audio grezzo in un file temporaneo
             temp_audio = output_audio.replace('.wav', '_temp.wav')
             subprocess.run([
@@ -55,9 +67,9 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                 '-y',
                 temp_audio
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            print(" ✓")
+            print(" ")
 
-            print("🎤 Separando vocals dal rumore di fondo con AI...", end='', flush=True)
+            print("Separando voce dal rumore di fondo con AI...", end='', flush=True)
 
             # Nascondi i log di audio-separator
             old_stdout = sys.stdout
@@ -79,7 +91,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
 
-            print(" ✓")
+            print(" ")
 
             # Trova il file Vocals
             vocals_file = None
@@ -101,7 +113,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
                 # Converti il file vocals al formato per analisi (16kHz mono)
-                print("🔊 Ottimizzando audio vocals per analisi...", end='', flush=True)
+                print("Ottimizzando voce per analisi...", end='', flush=True)
                 subprocess.run([
                     'ffmpeg', '-i', vocals_file,
                     '-acodec', 'pcm_s16le',
@@ -110,7 +122,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                     '-y',
                     output_audio
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                print(" ✓")
+                print(" ")
 
                 # Pulisci file temporanei
                 if os.path.exists(temp_audio):
@@ -122,7 +134,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                 if os.path.exists(instrumental_file):
                     os.remove(instrumental_file)
             else:
-                print(" ⚠️  Fallback a estrazione standard")
+                print(" Fallback a estrazione standard")
                 # Fallback: usa il file temporaneo convertito
                 subprocess.run([
                     'ffmpeg', '-i', temp_audio,
@@ -136,19 +148,19 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                     os.remove(temp_audio)
 
         except ImportError:
-            print("\n⚠️  audio-separator non installato, uso estrazione standard")
+            print("\naudio-separator non installato, uso estrazione standard")
             print("   Installa con: pip install audio-separator")
             # Fallback a estrazione standard
             separate_vocals = False
         except Exception as e:
-            print(f"\n⚠️  Errore durante separazione vocals: {e}")
+            print(f"\nErrore durante separazione vocals: {e}")
             print("   Fallback a estrazione standard")
             separate_vocals = False
 
     # Fallback o metodo standard senza separazione vocals
     if not separate_vocals:
         if noise_reduction:
-            print("🎵 Estraendo e ripulendo audio...", end='', flush=True)
+            print("Estraendo e ripulendo audio...", end='', flush=True)
             # Filtro audio complesso per ridurre il rumore di fondo
             audio_filter = (
                 "highpass=f=200,"           # Rimuove rumori bassi (< 200Hz)
@@ -158,7 +170,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
                 "loudnorm"                   # Normalizza il volume
             )
         else:
-            print("🎵 Estraendo audio...", end='', flush=True)
+            print("Estraendo audio...", end='', flush=True)
             audio_filter = None
 
         cmd = [
@@ -173,7 +185,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
         cmd.extend(['-y', output_audio])
 
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        print(" ✓")
+        print(" ")
 
     return vocals_full_path
 
@@ -181,7 +193,7 @@ def extract_audio(video_path: str, output_audio: str, noise_reduction: bool = Tr
 def analyze_audio_silence(audio_path: str, silence_threshold_db: float = -40,
                          min_silence_duration: float = 0.5) -> List[Tuple[float, float]]:
     """Analizza l'audio e trova gli intervalli di silenzio usando ffmpeg."""
-    print(f"🔍 Rilevando silenzi (soglia: {silence_threshold_db}dB)...", end='', flush=True)
+    print(f"Rilevando silenzi (soglia: {silence_threshold_db}dB)...", end='', flush=True)
 
     cmd = [
         'ffmpeg', '-i', audio_path,
@@ -208,7 +220,7 @@ def analyze_audio_silence(audio_path: str, silence_threshold_db: float = -40,
                     silence_intervals.append((silence_start, silence_end))
                     silence_start = None
 
-    print(f" ✓ ({len(silence_intervals)} intervalli)")
+    print(f"  ({len(silence_intervals)} intervalli)")
     return silence_intervals
 
 
@@ -224,7 +236,7 @@ def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_pe
     """
     try:
         import whisper
-        print(f"🎤 Generando sottotitoli con Whisper {model_size} (segmenti di ~{words_per_segment} parole)...")
+        print(f"Generando trascrizione con Whisper {model_size} (segmenti di ~{words_per_segment} parole)...")
 
         model = whisper.load_model(model_size)
         # Usa word_timestamps per ottenere timestamp parola per parola
@@ -283,8 +295,6 @@ def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_pe
                             'text': ' '.join(word_group)
                         })
 
-        print(f"✓ Trascrizione completata: {len(segments)} segmenti (~{words_per_segment} parole ciascuno)")
-
         # Salva file SRT temporaneo solo se richiesto
         if output_srt:
             with open(output_srt, 'w', encoding='utf-8') as f:
@@ -292,7 +302,6 @@ def generate_subtitles_whisper(video_path: str, output_srt: str = None, words_pe
                     f.write(f"{i}\n")
                     f.write(f"{format_timestamp_srt(segment['start'])} --> {format_timestamp_srt(segment['end'])}\n")
                     f.write(f"{segment['text']}\n\n")
-            print(f"  (File temporaneo SRT: {output_srt})")
 
         return segments
     except ImportError:
@@ -353,7 +362,6 @@ def save_subtitles_json(segments: List[Dict], output_json: str, video_path: str 
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print(f"✓ Sottotitoli JSON generati: {output_json}")
 
 
 def save_subtitles_txt(segments: List[Dict], output_txt: str) -> None:
@@ -362,7 +370,6 @@ def save_subtitles_txt(segments: List[Dict], output_txt: str) -> None:
         for segment in segments:
             f.write(f"{segment['text']}\n")
 
-    print(f"✓ Trascrizione TXT generata: {output_txt}")
 
 
 def format_timestamp_srt(seconds: float) -> str:
@@ -462,10 +469,6 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     :param subtitle_segments: Segmenti sottotitoli già generati (opzionale)
     :param save_subtitles: Se True, salva i sottotitoli (default: True)
     """
-    print("\n" + "="*60)
-    print("--> 3. Calcolo Timeline...")
-    print("="*60)
-
     # 1. Unisci tutti i tagli e ordinali
     all_cuts = silence_cuts + ai_cuts
     all_cuts.sort(key=lambda x: x[0])
@@ -482,10 +485,6 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
                 curr_start, curr_end = next_start, next_end
         merged_cuts.append((curr_start, curr_end))
 
-    print(f"  Tagli silenzi: {len(silence_cuts)}")
-    print(f"  Tagli AI: {len(ai_cuts)}")
-    print(f"  Tagli uniti: {len(merged_cuts)}")
-
     # 3. Calcola i segmenti da mantenere (inverso dei tagli)
     keep_ranges = []
     current_pos = 0.0
@@ -497,16 +496,12 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     if current_pos < video_duration:
         keep_ranges.append((current_pos, video_duration))
 
-    print(f"  Segmenti da mantenere: {len(keep_ranges)}")
-
     # Calcola statistiche
     original_duration = video_duration
     trimmed_duration = sum(end - start for start, end in keep_ranges)
     saved_time = original_duration - trimmed_duration
 
-    print(f"\n  Durata originale: {original_duration:.2f}s")
-    print(f"  Durata finale: {trimmed_duration:.2f}s")
-    print(f"  Tempo risparmiato: {saved_time:.2f}s ({saved_time/original_duration*100:.1f}%)")
+    print(f"Segmenti: {len(keep_ranges)} | Risparmio: {saved_time:.1f}s ({saved_time/original_duration*100:.1f}%)")
 
     # Ottieni informazioni video se non fornite
     if video_info is None:
@@ -524,118 +519,29 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
     edl_path = os.path.join(output_folder, "premiere_pro.edl")
     generate_edl(keep_ranges, video_path, edl_path, video_info)
 
-    # 5. Genera Video Bozza
-    print("\n" + "="*60)
-    print("--> 5. Generazione Video Bozza")
-    print("="*60)
-    print(f"📹 Tagliando {len(keep_ranges)} segmenti...")
+    # 5. Genera Segmenti
+    for idx, (start, end) in enumerate(keep_ranges):
+        dur = end - start
+        c_name = f"c_{idx:04d}.mp4"
+        chunk_path = os.path.join(chunks_dir, c_name)
 
-    concat_path = os.path.join(output_folder, "concat_list.txt")
-    start_time = time.time()
-
-    with open(concat_path, "w") as f:
-        for idx, (start, end) in enumerate(keep_ranges):
-            dur = end - start
-            c_name = f"c_{idx:04d}.mp4"
-            chunk_path = os.path.join(chunks_dir, c_name)
-
-            # Taglia segmento usando -ss e -t con codec copy
-            cmd = [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-ss", str(start),
-                "-i", video_path,
-                "-t", str(dur),
-                "-c", "copy",
-                chunk_path
-            ]
-
-            subprocess.run(cmd, check=True)
-            f.write(f"file 'chunks/{c_name}'\n")
-
-            # Barra di progresso
-            progress = ((idx + 1) / len(keep_ranges)) * 100
-            elapsed = time.time() - start_time
-            avg_time = elapsed / (idx + 1)
-            eta = avg_time * (len(keep_ranges) - (idx + 1))
-
-            if eta < 60:
-                eta_str = f"{int(eta)}s"
-            else:
-                eta_str = f"{int(eta // 60)}m {int(eta % 60)}s"
-
-            bar_length = 30
-            filled = int(bar_length * (idx + 1) / len(keep_ranges))
-            bar = '█' * filled + '░' * (bar_length - filled)
-
-            print(f"\r  [{bar}] {progress:.1f}% | {idx+1}/{len(keep_ranges)} | ETA: {eta_str}  ",
-                  end='', flush=True)
-
-    print()  # Nuova riga
-
-    # Concatena i segmenti
-    if vocals_audio_path and os.path.exists(vocals_audio_path):
-        print("🔗 Concatenando segmenti con audio vocals...", end='', flush=True)
-
-        # Prima concatena solo il video senza audio
-        draft_no_audio = os.path.join(output_folder, f"FINAL_{name_no_ext}_no_audio.mp4")
-        cmd_concat_video = [
+        # Taglia segmento usando -ss e -t con codec copy
+        cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_path,
+            "-ss", str(start),
+            "-i", video_path,
+            "-t", str(dur),
             "-c", "copy",
-            "-an",  # Rimuovi audio
-            draft_no_audio
-        ]
-        subprocess.run(cmd_concat_video, check=True)
-
-        # Poi combina il video con l'audio vocals
-        draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
-        cmd_merge_audio = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", draft_no_audio,
-            "-i", vocals_audio_path,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",  # Taglia al video più corto
-            draft
-        ]
-        subprocess.run(cmd_merge_audio, check=True)
-
-        # Rimuovi il file temporaneo senza audio
-        if os.path.exists(draft_no_audio):
-            os.remove(draft_no_audio)
-
-        print(" ✓")
-    else:
-        print("🔗 Concatenando segmenti...", end='', flush=True)
-        draft = os.path.join(output_folder, f"FINAL_{name_no_ext}.mp4")
-
-        cmd_concat = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_path,
-            "-c", "copy",
-            draft
+            chunk_path
         ]
 
-        subprocess.run(cmd_concat, check=True)
-        print(" ✓")
+        subprocess.run(cmd, check=True)
 
-    # Rimuovi il file FINAL e concat_list.txt
-    if os.path.exists(draft):
-        os.remove(draft)
-    if os.path.exists(concat_path):
-        os.remove(concat_path)
+    print("Segmenti video salvati in:", chunks_dir)
 
     # 7. Salva sottotitoli se disponibili
     if save_subtitles and subtitle_segments:
-        print("\n" + "="*60)
-        print("--> 6. Salvataggio Sottotitoli")
-        print("="*60)
-
         # Ri-segmenta i sottotitoli a 8 parole per l'esportazione
-        print("  📝 Ri-segmentazione sottotitoli per export (8 parole per segmento)...")
         export_segments = resegment_subtitles(subtitle_segments, words_per_segment=8)
 
         # Salva in formato SRT
@@ -645,57 +551,25 @@ def process_and_export(video_path: str, silence_cuts: List[Tuple[float, float]],
                 f.write(f"{i}\n")
                 f.write(f"{format_timestamp_srt(segment['start'])} --> {format_timestamp_srt(segment['end'])}\n")
                 f.write(f"{segment['text']}\n\n")
-        print(f"  ✓ Sottotitoli SRT salvati: {srt_path}")
-
-        # Verifica che il file esista
-        if os.path.exists(srt_path):
-            file_size = os.path.getsize(srt_path)
-            print(f"     File SRT verificato: {file_size} bytes")
 
         # Salva in formato JSON
         json_path = os.path.join(output_folder, "subtitles.json")
         save_subtitles_json(export_segments, json_path, video_path)
 
-        # Verifica che il file esista
-        if os.path.exists(json_path):
-            file_size = os.path.getsize(json_path)
-            print(f"     File JSON verificato: {file_size} bytes")
-
         # Salva in formato TXT
         txt_path = os.path.join(output_folder, "transcript.txt")
         save_subtitles_txt(export_segments, txt_path)
 
-        # Verifica che il file esista
-        if os.path.exists(txt_path):
-            file_size = os.path.getsize(txt_path)
-            print(f"     File TXT verificato: {file_size} bytes")
+        # Genera metadati AI con Gemini (se disponibile)
+        generate_video_metadata(txt_path, output_folder)
 
-    # 7. Sposta il video originale nella cartella di output
+    # 8. Sposta il video originale nella cartella di output
     original_video_name = Path(video_path).name
     destination_path = os.path.join(output_folder, original_video_name)
 
     # Verifica se il video originale non è già nella cartella di output
     if os.path.abspath(video_path) != os.path.abspath(destination_path):
-        print("\n" + "="*60)
-        print("--> 7. Spostamento Video Originale")
-        print("="*60)
-        print(f"📦 Spostando {original_video_name} in {output_folder}...", end='', flush=True)
         shutil.move(video_path, destination_path)
-        print(" ✓")
-        print(f"    Video originale spostato: {destination_path}")
-
-    print(f"\n{'='*60}")
-    print(f"✓ Elaborazione completata!")
-    print(f"{'='*60}")
-    print(f"    [OK] {chunks_dir} ({len(keep_ranges)} file)")
-    print(f"    [OK] {edl_path}")
-    if os.path.abspath(video_path) != os.path.abspath(destination_path):
-        print(f"    [OK] {destination_path}")
-    if save_subtitles and subtitle_segments:
-        print(f"    [OK] {os.path.join(output_folder, 'subtitles.srt')}")
-        print(f"    [OK] {os.path.join(output_folder, 'subtitles.json')}")
-        print(f"    [OK] {os.path.join(output_folder, 'transcript.txt')}")
-    print(f"{'='*60}\n")
 
 
 def generate_edl(keep_ranges: List[Tuple[float, float]], video_path: str,
@@ -744,10 +618,276 @@ def generate_edl(keep_ranges: List[Tuple[float, float]], video_path: str,
             f.write("\n")
             event_num += 1
 
-    print(f"  ✓ EDL salvato: {output_edl} (Video + Audio)")
+
+
+def analyze_with_gemini(transcript: str, api_key: str) -> Dict[str, str]:
+    """
+    Analizza la trascrizione usando Google Gemini API.
+    """
+    try:
+        import google.generativeai as genai
+
+        # Configura Gemini
+        genai.configure(api_key=api_key)
+
+        model_name = 'gemini-3-pro-preview'
+        model = genai.GenerativeModel(model_name)
+
+        # Prompt per l'analisi
+        prompt = f"""Analizza la seguente trascrizione di un video e genera:
+
+1. **TITOLO**: Un titolo accattivante e SEO-friendly per il video (max 70 caratteri)
+2. **DESCRIZIONE**: Una descrizione dettagliata del contenuto del video (200-300 parole) scritta in prima persona
+3. **TAGS**: Una lista di 10-15 tag rilevanti per il video, separati da virgola. I tag devono essere specifici, SEO-friendly e rappresentare i concetti chiave trattati nel video.
+4. **PROMPT_IMMAGINE**: Un prompt dettagliato in inglese per generare un'immagine di copertina usando un modello AI text-to-image. Il prompt deve descrivere l'argomento/tema trattato nel video (non il contesto di realizzazione), essere descrittivo, specifico e adatto a Stable Diffusion / DALL-E.
+
+Formato della risposta (JSON):
+{{
+  "titolo": "...",
+  "descrizione": "...",
+  "tags": "tag1, tag2, tag3, ...",
+  "prompt_immagine": "..."
+}}
+
+TRASCRIZIONE:
+{transcript}
+
+Rispondi SOLO con il JSON, senza altro testo."""
+
+
+        # Genera risposta
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+
+        # Pulisci il JSON dalla risposta
+        if response_text.startswith("```json"):
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.replace("```", "").strip()
+
+        # Parse JSON
+        try:
+            metadata = json.loads(response_text)
+            return metadata
+        except json.JSONDecodeError:
+            print("Errore nel parsing JSON. Testo ricevuto:")
+            print(response_text)
+            # Fallback
+            return {
+                "titolo": "Video senza titolo",
+                "descrizione": transcript[:300] + "..." if len(transcript) > 300 else transcript,
+                "tags": "",
+                "prompt_immagine": "professional video thumbnail, high quality"
+            }
+
+    except ImportError:
+        print("google-generativeai non installato. Salta generazione metadati.")
+        return None
+    except Exception as e:
+        error_message = str(e)
+        if "quota" in error_message.lower() or "rate limit" in error_message.lower():
+            print(f"Errore di quota API superata!")
+            print(f"   Stai usando {model_name}. Attendi qualche minuto o passa a gemini-1.5-flash.")
+        else:
+            print(f"Errore durante l'analisi con Gemini: {e}")
+        return None
+
+
+def generate_thumbnail_with_gemini(image_prompt: str, api_key: str, output_path: str, personal_image_path: str = "personal_image.png") -> bool:
+    """
+    Genera un'immagine di copertina YouTube usando Gemini 3 Pro con generazione immagini.
+
+    :param image_prompt: Prompt per la generazione dell'immagine
+    :param api_key: Chiave API di Google Gemini
+    :param output_path: Percorso dove salvare l'immagine generata
+    :param personal_image_path: Percorso dell'immagine personale da includere
+    :return: True se generata con successo, False altrimenti
+    """
+    try:
+        from google import genai
+        from google.genai import types
+        from PIL import Image
+        import io
+
+
+        # Verifica immagine personale
+        if os.path.exists(personal_image_path):
+            with open(personal_image_path, 'rb') as f:
+                personal_image_bytes = f.read()
+            personal_image_part = types.Part.from_bytes(data=personal_image_bytes, mime_type='image/png')
+        else:
+            personal_image_part = None
+
+        # Costruisci prompt dettagliato per thumbnail YouTube
+        if personal_image_part:
+            full_prompt = f"""Create a professional YouTube thumbnail with these specifications:
+
+LAYOUT: 16:9 aspect ratio (1920x1080), split composition with person on one side and content on the other
+
+PERSON STYLING: Integrate the person from the provided image seamlessly into the scene. The person should appear natural and engaging, with proper lighting that matches the overall aesthetic. Position them prominently but balanced with the content side.
+
+CONTENT SIDE: {image_prompt}
+
+OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching yet cohesive design"""
+        else:
+            full_prompt = f"""Create a professional YouTube thumbnail with these specifications:
+
+LAYOUT: 16:9 aspect ratio (1920x1080)
+
+CONTENT: {image_prompt}
+
+OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching design"""
+
+
+        # Salva il prompt completo in un file TXT
+        prompt_file_path = output_path.replace('thumbnail.png', 'prompt.txt')
+        try:
+            with open(prompt_file_path, 'w', encoding='utf-8') as f:
+                f.write(full_prompt)
+            print(f"File prompt thumbnail generato!")
+        except Exception as e:
+            print(f"Errore salvataggio prompt: {e}")
+
+        # Client con timeout standard
+        client = genai.Client(api_key=api_key)
+
+        # Contenuto
+        contents = [full_prompt]
+        if personal_image_part:
+            contents.append(personal_image_part)
+
+
+        # Genera
+        response = client.models.generate_content(
+            model='models/gemini-3-pro-image-preview',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                image_config=types.ImageConfig(
+                    aspect_ratio='16:9',
+                    image_size='4K'
+                )
+            )
+        )
+
+        # Estrai immagine
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+
+            for part in candidate.content.parts:
+                if hasattr(part, 'inline_data') and part.inline_data:
+                    image_data = part.inline_data.data
+                    pil_image = Image.open(io.BytesIO(image_data))
+
+                    # Ridimensiona
+                    if pil_image.size != (1920, 1080):
+                        pil_image = pil_image.resize((1920, 1080), Image.Resampling.LANCZOS)
+
+                    # Salva
+                    pil_image.save(output_path, 'PNG', quality=95)
+                    print(f"File thumbnail generato!")
+                    return True
+
+            return False
+        else:
+            return False
+
+    except Exception as e:
+        print(f"Errore: {e}")
+        print(f"   Tipo: {type(e).__name__}")
+        return False
+
+
+def save_metadata(metadata: Dict[str, str], output_path: str) -> None:
+    """
+    Salva i metadati in un file TXT.
+    """
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("METADATI VIDEO\n")
+            f.write("=" * 80 + "\n\n")
+
+            f.write("TITOLO\n")
+            f.write("-" * 80 + "\n")
+            f.write(metadata.get('titolo', 'N/A') + "\n\n")
+
+            f.write("DESCRIZIONE\n")
+            f.write("-" * 80 + "\n")
+            f.write(metadata.get('descrizione', 'N/A') + "\n\n")
+
+            f.write("TAGS\n")
+            f.write("-" * 80 + "\n")
+            f.write(metadata.get('tags', 'N/A') + "\n\n")
+
+            f.write("PROMPT IMMAGINE\n")
+            f.write("-" * 80 + "\n")
+            f.write(metadata.get('prompt_immagine', 'N/A') + "\n\n")
+
+        print(f"File metadati generato!")
+
+    except Exception as e:
+        print(f"Errore durante il salvataggio metadati: {e}")
+
+
+def generate_video_metadata(transcript_path: str, output_folder: str, api_key: Optional[str] = None) -> None:
+    """
+    Genera metadati video analizzando la trascrizione con Google Gemini.
+
+    :param transcript_path: Percorso del file di trascrizione
+    :param output_folder: Cartella dove salvare i metadati
+    :param api_key: Chiave API Gemini (opzionale, usa .env se non specificata)
+    """
+    # Carica API key da .env se non specificata
+    if not api_key:
+        api_key = os.getenv('GEMINI_API_KEY')
+
+    if not api_key:
+        print("Chiave API Gemini non trovata. Salta generazione metadati.")
+        print("   Aggiungi GEMINI_API_KEY al file .env per abilitare questa funzionalità.")
+        return
+
+    # Carica trascrizione
+    try:
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            transcript = f.read().strip()
+    except Exception as e:
+        print(f"Errore lettura trascrizione: {e}")
+        return
+
+    log_phase("Generazione metadati AI con Gemini")
+
+    # Analizza con Gemini
+    metadata = analyze_with_gemini(transcript, api_key)
+
+    if not metadata:
+        return
+
+    # Salva metadati
+    metadata_path = os.path.join(output_folder, "metadata.txt")
+    save_metadata(metadata, metadata_path)
+
+    # Genera thumbnail YouTube con Gemini (se disponibile)
+    if metadata.get('prompt_immagine'):
+        # Determina percorso dell'immagine personale (nella root del progetto)
+        project_root = Path(__file__).parent
+        personal_image_path = str(project_root / "personal_image.png")
+
+        # Determina percorso output thumbnail
+        thumbnail_path = os.path.join(output_folder, "thumbnail.png")
+
+        generate_thumbnail_with_gemini(
+            image_prompt=metadata['prompt_immagine'],
+            api_key=api_key,
+            output_path=thumbnail_path,
+            personal_image_path=personal_image_path
+        )
 
 
 def main():
+    # --- CARICAMENTO .ENV ---
+    if DOTENV_AVAILABLE:
+        load_dotenv()
+    # ------------------------
     parser = argparse.ArgumentParser(
         description="Taglia automaticamente i silenzi da un video"
     )
@@ -763,10 +903,28 @@ def main():
                        help='Modello Whisper per i sottotitoli (default: medium)')
     parser.add_argument('--words-per-segment', type=int, default=3,
                        help='Numero di parole per segmento per analisi silenzi (default: 3)')
+    parser.add_argument('--no-whisper', action='store_true',
+                       help='Salta la generazione di sottotitoli e metadati AI con Whisper/Gemini')
 
     args = parser.parse_args()
 
+    # Stampa parametri di avvio
+    print("\n" + "="*100)
+    print("VIDEO SILENCE CUTTER")
+    print("="*100)
+    print(f"Input video: {args.input_video}")
+    print(f"Threshold: {args.threshold} dB")
+    print(f"Duration: {args.duration}s")
+    print(f"Merge: {args.merge}s")
+    if not args.no_whisper:
+        print(f"Whisper model: {args.whisper_model}")
+        print(f"Words per segment: {args.words_per_segment}")
+    else:
+        print("Whisper: DISABLED")
+    print("="*100)
+
     # Verifica dipendenze
+    log_phase("Verifica dipendenze")
     check_dependencies()
 
     # Verifica che il file video esista
@@ -778,19 +936,13 @@ def main():
     output_folder = os.path.join("output", video_name)
 
     # Ottieni informazioni sul video
+    log_phase("Analisi video")
     video_info = get_video_info(args.input_video)
     video_duration = float(video_info['format']['duration'])
     video_stream = next((s for s in video_info['streams'] if s['codec_type'] == 'video'), None)
     fps = eval(video_stream.get('r_frame_rate', '30/1')) if video_stream else 30.0
-
-    print(f"\n{'='*60}")
-    print(f"Video Silence Cutter")
-    print(f"{'='*60}")
-    print(f"Video: {args.input_video}")
-    print(f"Durata: {video_duration:.2f}s")
+    print(f"Durata: {video_duration:.2f}s, FPS: {fps:.2f}")
     print(f"Output: {output_folder}")
-    print(f"Modello Whisper: {args.whisper_model}")
-    print(f"{'='*60}\n")
 
     # Crea cartella di output prima
     os.makedirs(output_folder, exist_ok=True)
@@ -801,40 +953,43 @@ def main():
         srt_path = os.path.join(tmpdir, 'subtitles.srt')
 
         # Estrai audio con separazione vocale (mantieni vocals solo in tmpdir)
+        log_phase("Estrazione audio")
         vocals_full_path = extract_audio(args.input_video, audio_path, noise_reduction=True, separate_vocals=True)
 
         # Analizza silenzi
+        log_phase("Analisi silenzi")
         silence_intervals = analyze_audio_silence(
             audio_path,
             args.threshold,
             args.duration
         )
 
-        # Genera sottotitoli
-        subtitle_segments = generate_subtitles_whisper(
-            args.input_video,
-            srt_path,
-            words_per_segment=args.words_per_segment,
-            model_size=args.whisper_model
-        )
+        # Genera sottotitoli (se non disabilitato)
+        if args.no_whisper:
+            subtitle_segments = []
+        else:
+            log_phase("Trascrizione Whisper")
+            subtitle_segments = generate_subtitles_whisper(
+                args.input_video,
+                srt_path,
+                words_per_segment=args.words_per_segment,
+                model_size=args.whisper_model
+            )
 
         # Unisci intervalli di silenzio
+        log_phase("Unione intervalli silenzi")
         merged_silence = merge_silence_intervals(
             silence_intervals,
-            subtitle_segments,
+            subtitle_segments if not args.no_whisper else [],
             args.merge
         )
-
-        print(f"\nIntervalli di silenzio da rimuovere: {len(merged_silence)}")
-        for i, (start, end) in enumerate(merged_silence[:10], 1):
-            print(f"  {i}. {start:.2f}s - {end:.2f}s (durata: {end-start:.2f}s)")
-        if len(merged_silence) > 10:
-            print(f"  ... e altri {len(merged_silence) - 10}")
+        print(f"Intervalli da rimuovere: {len(merged_silence)}")
 
         # Determina nome base per i file
         name_no_ext = Path(args.input_video).stem + "_tagliato"
 
         # Usa process_and_export per generare tutto
+        log_phase("Export video e file")
         process_and_export(
             video_path=args.input_video,
             silence_cuts=merged_silence,
@@ -844,7 +999,7 @@ def main():
             video_info=video_info,
             name_no_ext=name_no_ext,
             subtitle_segments=subtitle_segments,
-            save_subtitles=True,
+            save_subtitles=not args.no_whisper,
             vocals_audio_path=vocals_full_path
         )
 
