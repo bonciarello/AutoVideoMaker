@@ -272,7 +272,8 @@ def generate_video_metadata(transcript_path: str,
     if metadata.get('prompt_immagine'):
         # Determina percorso dell'immagine personale
         if personal_image_path is None:
-            project_root = Path(__file__).parent
+            # Il file personal_image.png è nella root del progetto, non in src/
+            project_root = Path(__file__).parent.parent
             personal_image_path = str(project_root / "personal_image.png")
 
         # Determina percorso output thumbnail
