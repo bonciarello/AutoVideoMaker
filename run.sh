@@ -87,6 +87,13 @@ fi
 # Attiva virtual environment
 source venv/bin/activate
 
+# Installa/aggiorna dipendenze in ogni caso
+echo -e "${YELLOW}Verificando dipendenze...${NC}"
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt > /dev/null 2>&1
+    echo -e "${GREEN}✓ Dipendenze verificate e aggiornate${NC}\n"
+fi
+
 # Estrai il file video dal primo argomento
 VIDEO_FILE="$1"
 
