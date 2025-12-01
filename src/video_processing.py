@@ -163,14 +163,20 @@ def process_and_export(video_path: str,
         merged_cuts.append((curr_start, curr_end))
 
     # 3. Calcola i segmenti da mantenere (inverso dei tagli)
+    # Durata minima del segmento in secondi (evita segmenti troppo corti che causano errori in FFmpeg)
+    MIN_SEGMENT_DURATION = 0.1
+
     keep_ranges = []
     current_pos = 0.0
     for cs, ce in merged_cuts:
-        if cs > current_pos and (cs - current_pos) > 0.1:
+        duration = cs - current_pos
+        if cs > current_pos and duration >= MIN_SEGMENT_DURATION:
             keep_ranges.append((current_pos, cs))
         current_pos = max(current_pos, ce)
 
-    if current_pos < video_duration:
+    # Aggiungi segmento finale se ha durata sufficiente
+    final_duration = video_duration - current_pos
+    if final_duration >= MIN_SEGMENT_DURATION:
         keep_ranges.append((current_pos, video_duration))
 
     # Calcola statistiche
