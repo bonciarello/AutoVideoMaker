@@ -119,19 +119,19 @@ def generate_thumbnail_with_gemini(image_prompt: str,
 
 LAYOUT: 16:9 aspect ratio (1920x1080), split composition with person on one side and content on the other
 
-PERSON STYLING: Integrate the person from the provided image seamlessly into the scene. The person should appear natural and engaging, with proper lighting that matches the overall aesthetic. Position them prominently but balanced with the content side.
+PERSON STYLING: Integrate the person from the provided image seamlessly into the scene. IMPORTANT: Modify the person's facial expression to show excitement, surprise, or strong emotion related to the video topic (amazed, shocked, enthusiastic, etc.). The person should appear natural and engaging, with proper lighting that matches the overall aesthetic. Position them prominently but balanced with the content side.
 
-CONTENT SIDE: {image_prompt}
+CONTENT SIDE: {image_prompt}. Use ICONS and visual symbols instead of text. NO text, NO titles, NO words - only visual elements and icons that represent the content.
 
-OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching yet cohesive design"""
+OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching yet cohesive design. Absolutely NO text or written words anywhere in the image."""
         else:
             full_prompt = f"""Create a professional YouTube thumbnail with these specifications:
 
 LAYOUT: 16:9 aspect ratio (1920x1080)
 
-CONTENT: {image_prompt}
+CONTENT: {image_prompt}. Use ICONS and visual symbols instead of text. NO text, NO titles, NO words - only visual elements and icons that represent the content.
 
-OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching design"""
+OVERALL STYLE: Professional YouTube thumbnail quality, vibrant colors, high contrast, dramatic lighting, balanced composition, eye-catching design. Absolutely NO text or written words anywhere in the image."""
 
         # Salva il prompt completo in un file TXT
         prompt_file_path = output_path.replace('thumbnail.png', 'prompt.txt')
