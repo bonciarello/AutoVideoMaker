@@ -30,12 +30,6 @@ from pathlib import Path
 # Aggiungi src al path per permettere import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-# Tenta di importare dotenv per caricare il file .env
-try:
-    from dotenv import load_dotenv
-    DOTENV_AVAILABLE = True
-except ImportError:
-    DOTENV_AVAILABLE = False
 
 # Import dei moduli personalizzati da src/
 from utils import log_phase, get_video_info
@@ -48,11 +42,6 @@ from metadata_generation import generate_video_metadata
 
 
 def main():
-    # --- CARICAMENTO .ENV ---
-    if DOTENV_AVAILABLE:
-        load_dotenv()
-    # ------------------------
-
     parser = argparse.ArgumentParser(
         description="Taglia automaticamente i silenzi da un video"
     )
@@ -65,11 +54,9 @@ def main():
                        help='Distanza massima per unire silenzi vicini (default: 1.0s)')
     parser.add_argument('--whisper-model', type=str, default='medium',
                        choices=['tiny', 'base', 'small', 'medium', 'large'],
-                       help='Modello Whisper per i sottotitoli (default: medium)')
-    parser.add_argument('--words-per-segment', type=int, default=3,
-                       help='Numero di parole per segmento per analisi silenzi (default: 3)')
+                       help='Modello Whisper per la trascrizione (default: medium)')
     parser.add_argument('--no-whisper', action='store_true',
-                       help='Salta la generazione di sottotitoli e metadati AI con Whisper/Gemini')
+                       help='Salta la generazione della trascrizione e metadati AI con Whisper/Gemini')
 
     args = parser.parse_args()
 
@@ -83,7 +70,6 @@ def main():
     print(f"Merge: {args.merge}s")
     if not args.no_whisper:
         print(f"Whisper model: {args.whisper_model}")
-        print(f"Words per segment: {args.words_per_segment}")
     else:
         print("Whisper: DISABLED")
     print("="*100)
@@ -119,7 +105,6 @@ def main():
     # Crea directory temporanea
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, 'audio.wav')
-        srt_path = os.path.join(tmpdir, 'subtitles.srt')
 
         # ============================================================
         # FLUSSO 2: ESTRAZIONE AUDIO
@@ -146,13 +131,11 @@ def main():
         # FLUSSO 4: TRASCRIZIONE WHISPER
         # ============================================================
         if args.no_whisper:
-            subtitle_segments = []
+            transcript_text = ""
         else:
             log_phase("Trascrizione Whisper")
-            subtitle_segments = generate_subtitles_whisper(
+            transcript_text = generate_subtitles_whisper(
                 args.input_video,
-                srt_path,
-                words_per_segment=args.words_per_segment,
                 model_size=args.whisper_model
             )
 
@@ -162,7 +145,6 @@ def main():
         log_phase("Unione intervalli silenzi")
         merged_silence = merge_silence_intervals(
             silence_intervals,
-            subtitle_segments if not args.no_whisper else [],
             args.merge
         )
         print(f"Intervalli da rimuovere: {len(merged_silence)}")
@@ -182,8 +164,8 @@ def main():
             output_folder=output_folder,
             video_info=video_info,
             name_no_ext=name_no_ext,
-            subtitle_segments=subtitle_segments,
-            save_subtitles=not args.no_whisper,
+            transcript_text=transcript_text,
+            save_transcript=not args.no_whisper,
             vocals_audio_path=vocals_full_path
         )
 

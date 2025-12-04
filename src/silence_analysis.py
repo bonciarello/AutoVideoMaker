@@ -51,40 +51,23 @@ def analyze_audio_silence(audio_path: str,
 
 
 def merge_silence_intervals(silence_intervals: List[Tuple[float, float]],
-                           subtitle_segments: List[Dict] = None,
                            merge_distance: float = 1.0) -> List[Tuple[float, float]]:
     """
-    Unisce gli intervalli di silenzio e considera anche le pause tra sottotitoli.
+    Unisce gli intervalli di silenzio vicini.
 
     :param silence_intervals: Lista di intervalli di silenzio dall'audio
-    :param subtitle_segments: Lista di segmenti sottotitoli (opzionale)
     :param merge_distance: Distanza massima per unire intervalli vicini (secondi)
     :return: Lista di intervalli uniti
     """
-    all_intervals = []
-
-    # Aggiungi intervalli di silenzio dall'audio
-    all_intervals.extend(silence_intervals)
-
-    # Aggiungi pause tra sottotitoli
-    if subtitle_segments:
-        for i in range(len(subtitle_segments) - 1):
-            pause_start = subtitle_segments[i]['end']
-            pause_end = subtitle_segments[i + 1]['start']
-
-            # Se c'è una pausa significativa tra sottotitoli
-            if pause_end - pause_start > 0.3:
-                all_intervals.append((pause_start, pause_end))
-
-    if not all_intervals:
+    if not silence_intervals:
         return []
 
     # Ordina gli intervalli
-    all_intervals.sort(key=lambda x: x[0])
+    sorted_intervals = sorted(silence_intervals, key=lambda x: x[0])
 
     # Unisci intervalli vicini
-    merged = [all_intervals[0]]
-    for current in all_intervals[1:]:
+    merged = [sorted_intervals[0]]
+    for current in sorted_intervals[1:]:
         last = merged[-1]
         if current[0] - last[1] <= merge_distance:
             merged[-1] = (last[0], max(last[1], current[1]))

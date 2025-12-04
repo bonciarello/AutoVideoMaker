@@ -239,6 +239,13 @@ def generate_video_metadata(transcript_path: str,
     """
     from utils import log_phase
 
+    # Carica .env per ottenere la chiave API
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # dotenv non disponibile, usa variabili d'ambiente del sistema
+
     # Carica API key da .env se non specificata
     if not api_key:
         api_key = os.getenv('GEMINI_API_KEY')

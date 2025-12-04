@@ -11,89 +11,31 @@ from utils import format_timestamp_srt
 def generate_subtitles_whisper(video_path: str,
                                output_srt: str = None,
                                words_per_segment: int = 3,
-                               model_size: str = "medium") -> List[Dict]:
+                               model_size: str = "medium") -> str:
     """
-    Genera sottotitoli usando Whisper con segmenti di N parole.
+    Genera trascrizione usando Whisper (solo testo, senza timestamp).
 
     :param video_path: Percorso del video
-    :param output_srt: Percorso output SRT (opzionale, per file temporaneo)
-    :param words_per_segment: Numero di parole per segmento per l'analisi silenzi (default: 3)
+    :param output_srt: Non usato, mantenuto per compatibilità
+    :param words_per_segment: Non usato, mantenuto per compatibilità
     :param model_size: Dimensione del modello Whisper (tiny, base, small, medium, large, default: medium)
-    :return: Lista di segmenti sottotitoli
+    :return: Testo completo della trascrizione
     """
     try:
         import whisper
-        print(f"Generando trascrizione con Whisper {model_size} (segmenti di ~{words_per_segment} parole)...")
+        print(f"Generando trascrizione con Whisper {model_size}...")
 
         model = whisper.load_model(model_size)
-        # Usa word_timestamps per ottenere timestamp parola per parola
-        result = model.transcribe(video_path, language="it", word_timestamps=True)
+        # Trascrizione semplice senza timestamp
+        result = model.transcribe(video_path, language="it")
 
-        segments = []
+        # Estrai solo il testo completo
+        full_text = result['text'].strip()
 
-        # Se Whisper supporta word_timestamps, dividi ogni N parole
-        for segment in result['segments']:
-            # Controlla se ci sono word timestamps disponibili
-            if 'words' in segment and segment['words']:
-                words = segment['words']
-
-                # Dividi le parole in gruppi di N
-                for i in range(0, len(words), words_per_segment):
-                    word_group = words[i:i + words_per_segment]
-
-                    if word_group:
-                        # Prendi il timestamp della prima e ultima parola del gruppo
-                        start_time = word_group[0].get('start', word_group[0].get('timestamp', segment['start']))
-                        end_time = word_group[-1].get('end', word_group[-1].get('timestamp', segment['end']))
-
-                        # Se end_time non è disponibile, stima dalla durata media
-                        if end_time == start_time or end_time is None:
-                            # Stima la durata basandosi sul numero di caratteri
-                            text_group = ' '.join([w.get('word', w.get('text', '')).strip() for w in word_group])
-                            estimated_duration = len(text_group) * 0.05  # ~50ms per carattere
-                            end_time = start_time + estimated_duration
-                        else:
-                            text_group = ' '.join([w.get('word', w.get('text', '')).strip() for w in word_group])
-
-                        segments.append({
-                            'start': float(start_time),
-                            'end': float(end_time),
-                            'text': text_group.strip()
-                        })
-            else:
-                # Fallback: usa i segmenti originali se word_timestamps non disponibile
-                # e dividi il testo manualmente
-                text = segment['text'].strip()
-                words = text.split()
-                duration = segment['end'] - segment['start']
-                words_count = len(words)
-
-                if words_count > 0:
-                    time_per_word = duration / words_count
-
-                    for i in range(0, len(words), words_per_segment):
-                        word_group = words[i:i + words_per_segment]
-                        group_start = segment['start'] + (i * time_per_word)
-                        group_end = segment['start'] + ((i + len(word_group)) * time_per_word)
-
-                        segments.append({
-                            'start': float(group_start),
-                            'end': float(group_end),
-                            'text': ' '.join(word_group)
-                        })
-
-        # Salva file SRT temporaneo solo se richiesto
-        if output_srt:
-            with open(output_srt, 'w', encoding='utf-8') as f:
-                for i, segment in enumerate(segments, 1):
-                    f.write(f"{i}\n")
-                    f.write(f"{format_timestamp_srt(segment['start'])} --> {format_timestamp_srt(segment['end'])}\n")
-                    f.write(f"{segment['text']}\n\n")
-
-        return segments
+        return full_text
     except ImportError:
         print("ATTENZIONE: openai-whisper non è installato. Installalo con: pip install openai-whisper")
-        return []
+        return ""
 
 
 def resegment_subtitles(segments: List[Dict], words_per_segment: int = 8) -> List[Dict]:

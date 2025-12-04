@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
 from utils import get_video_info
-from transcription import save_subtitles_srt, save_subtitles_json, save_subtitles_txt, resegment_subtitles
 
 
 def generate_edl(keep_ranges: List[Tuple[float, float]],
@@ -129,9 +128,9 @@ def process_and_export(video_path: str,
                       output_folder: str,
                       video_info: Dict = None,
                       name_no_ext: str = None,
-                      subtitle_segments: List[Dict] = None,
-                      save_subtitles: bool = True,
-                      vocals_audio_path: str = None) -> None:
+                      transcript_text: str = None,
+                      save_transcript: bool = True,
+                      vocals_audio_path: str = None) -> Optional[str]:
     """
     Processa ed esporta il video unendo silence_cuts e ai_cuts.
 
@@ -142,9 +141,10 @@ def process_and_export(video_path: str,
     :param output_folder: Cartella di output per i file generati
     :param video_info: Informazioni video da ffprobe (opzionale)
     :param name_no_ext: Nome del file senza estensione (opzionale)
-    :param subtitle_segments: Segmenti sottotitoli già generati (opzionale)
-    :param save_subtitles: Se True, salva i sottotitoli (default: True)
+    :param transcript_text: Testo della trascrizione (opzionale)
+    :param save_transcript: Se True, salva la trascrizione (default: True)
     :param vocals_audio_path: Percorso audio vocals separato (opzionale, per uso futuro)
+    :return: Percorso del file di trascrizione se salvato, altrimenti None
     """
     # 1. Unisci tutti i tagli e ordinali
     all_cuts = silence_cuts + ai_cuts
@@ -202,23 +202,12 @@ def process_and_export(video_path: str,
     cut_video_segments(video_path, keep_ranges, chunks_dir)
     print("Segmenti video salvati in:", chunks_dir)
 
-    # 6. Salva sottotitoli se disponibili
-    if save_subtitles and subtitle_segments:
-        # Ri-segmenta i sottotitoli a 8 parole per l'esportazione
-        export_segments = resegment_subtitles(subtitle_segments, words_per_segment=8)
-
-        # Salva in formato SRT
-        srt_path = os.path.join(output_folder, "subtitles.srt")
-        save_subtitles_srt(export_segments, srt_path)
-
-        # Salva in formato JSON
-        json_path = os.path.join(output_folder, "subtitles.json")
-        save_subtitles_json(export_segments, json_path, video_path)
-
-        # Salva in formato TXT
+    # 6. Salva trascrizione se disponibile
+    if save_transcript and transcript_text:
         txt_path = os.path.join(output_folder, "transcript.txt")
-        save_subtitles_txt(export_segments, txt_path)
-
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(transcript_text)
+        print(f"Trascrizione salvata in: {txt_path}")
         return txt_path  # Ritorna il path della trascrizione per la generazione metadati
 
     return None

@@ -72,7 +72,7 @@ def extract_audio_with_vocal_separation(video_path: str, output_audio: str) -> O
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         print(" ")
 
-        print("Separando voce dal rumore di fondo con AI...", end='', flush=True)
+        print("Separando voce dal rumore di fondo...", end='', flush=True)
 
         # Nascondi i log di audio-separator
         old_stdout = sys.stdout
