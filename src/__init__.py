@@ -1,15 +1,15 @@
 """
-Video Silence Cutter - Moduli Core
+AutoVideoMaker - Core Modules
 
-Questo package contiene tutti i moduli per l'elaborazione video:
-- 1_dependency_check: Verifica dipendenze
-- 2_audio_extraction: Estrazione audio
-- 3_silence_analysis: Analisi silenzi
-- 4_transcription: Trascrizione Whisper
-- 5_video_processing: Elaborazione video
-- 6_metadata_generation: Generazione metadati AI
-- utils: Funzioni condivise
+This package contains all modules for video processing:
+- dependency_check: Dependency verification
+- audio_extraction: Audio extraction
+- silence_analysis: Silence analysis
+- transcription: Whisper transcription
+- video_processing: Video processing
+- metadata_generation: AI metadata generation
+- utils: Shared functions
 """
 
-__version__ = "2.0.0"
-__author__ = "Video Silence Cutter Team"
+__version__ = "2.1.0"
+__author__ = "AutoVideoMaker Team"

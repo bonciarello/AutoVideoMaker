@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script unificato per Video Silence Cutter + AI Metadata Generator
-# Setup automatico al primo avvio, poi esecuzione rapida
+# AutoVideoMaker - Unified script for automated video editing
+# Automatic setup on first run, then fast execution
 
 set -e  # Esci in caso di errore
 
@@ -24,7 +24,7 @@ fi
 # Funzione per il setup iniziale
 setup_environment() {
     echo -e "${BLUE}====================================================================================================${NC}"
-    echo -e "${BLUE}     Video Silence Cutter - Setup${NC}"
+    echo -e "${BLUE}     AutoVideoMaker - Setup${NC}"
     echo -e "${BLUE}====================================================================================================${NC}\n"
 
     # Verifica Python 3
@@ -72,7 +72,7 @@ setup_environment() {
     fi
 
     # Rendi eseguibile lo script Python
-    chmod +x video_silence_cutter.py 2>/dev/null || true
+    chmod +x main.py 2>/dev/null || true
 
     echo -e "${BLUE}====================================================================================================${NC}"
     echo -e "${GREEN}Setup completato con successo!${NC}"
@@ -94,14 +94,14 @@ if [ -f "requirements.txt" ]; then
     echo -e "${GREEN}✓ Dipendenze verificate e aggiornate${NC}\n"
 fi
 
-# Estrai il file video dal primo argomento
-VIDEO_FILE="$1"
-
-# Verifica che il video esista
-if [ ! -f "$VIDEO_FILE" ]; then
-    echo -e "${RED}Errore: File non trovato: $VIDEO_FILE${NC}"
+# Verifica che ci siano argomenti
+if [ $# -eq 0 ]; then
+    echo -e "${RED}Errore: Nessun file video specificato${NC}"
+    echo -e "${YELLOW}Uso: $0 video.mp4 [opzioni]${NC}"
+    echo -e "${YELLOW}     $0 *.mp4 [opzioni]${NC}"
+    echo -e "${YELLOW}     $0 video1.mp4 video2.mp4 [opzioni]${NC}"
     exit 1
 fi
 
-# Esegui video_silence_cutter.py (include tutto: processing + metadati AI)
-python video_silence_cutter.py "$@"
+# Esegui main.py (supporta video singoli e multipli)
+python main.py "$@"

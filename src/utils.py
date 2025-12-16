@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utilità condivise per Video Silence Cutter
+Shared utilities for AutoVideoMaker
 """
 
 import json
