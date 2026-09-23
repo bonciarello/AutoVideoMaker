@@ -67,3 +67,9 @@ def test_run_rules_combines_and_sorts():
 
 def test_run_rules_without_words():
     assert run_rules([], "rifaccio") == []
+
+
+def test_cue_restart_ignores_punctuation_only_tokens():
+    # «.» normalizza a "": due vuoti non devono combaciare con due vuoti
+    words = make_words("A . . B rifaccio . . B", pauses={4: 0.5})
+    assert find_cue_takes(words, "rifaccio")[0].sure is False

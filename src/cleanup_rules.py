@@ -231,6 +231,8 @@ def _find_restart(norm: List[str], words: Words, before: int, restart: List[str]
     limit = words[before]['start'] - RETAKE_LOOKBACK
     for k in range(min(RESTART_MAX, len(restart)), RESTART_MIN - 1, -1):
         target = restart[:k]
+        if not all(target):
+            continue
         for s in range(before - k, -1, -1):
             if words[s]['start'] < limit:
                 break
