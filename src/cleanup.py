@@ -230,6 +230,7 @@ def run_cleanup(words, mode: str, cue_word: str, audio_path: Optional[str],
         start = cut_start_time(words, a, pad, energy)
         end = cut_end_time(words, b, pad, energy, video_duration)
         if end - start < MIN_CUT:
+            result.warnings.append(f"taglio troppo corto ignorato (parole {a}–{b})")
             continue
         first = group["parts"][0][0]
         result.cuts.append(CleanupCut(

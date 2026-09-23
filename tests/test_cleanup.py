@@ -118,6 +118,16 @@ def test_run_cleanup_full_without_client_falls_back_to_rules():
     assert "ANTHROPIC_API_KEY" in result.warnings[0]
 
 
+def test_run_cleanup_warns_when_a_cut_is_too_short():
+    words = [{"id": 0, "start": 0.0, "end": 0.005, "word": "che", "text": "che", "confidence": 1},
+             {"id": 1, "start": 0.005, "end": 0.3, "word": "che", "text": "che", "confidence": 1},
+             {"id": 2, "start": 0.4, "end": 0.7, "word": "bello", "text": "bello", "confidence": 1}]
+    result = run_cleanup(words, mode="rules", cue_word="rifaccio", audio_path=None,
+                         video_duration=1.0, pad=0.05)
+    assert result.cuts == []
+    assert any("troppo corto" in w for w in result.warnings)
+
+
 def test_run_cleanup_without_words_returns_empty_and_skips_claude():
     class Boom:
         @property
