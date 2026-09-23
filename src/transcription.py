@@ -7,9 +7,73 @@ Deepgram è il metodo di default: è veloce (API cloud) e non richiede
 il download di modelli. Richiede DEEPGRAM_API_KEY nel file .env.
 Se Deepgram non è configurato o fallisce, viene fatto fallback
 automatico a Whisper (locale).
+
+Ogni parola ha: id (posizione nella lista), start/end (secondi), word
+(forma normalizzata), text (con punteggiatura, es. "a...") e confidence.
+La trascrizione si salva in words.json e si riusa ai rilanci.
 """
 
 import os
+import json
+from pathlib import Path
+from typing import Optional
+
+from utils import normalize_word
+
+# Versione del formato di words.json
+WORDS_FILE_VERSION = 1
+
+
+def _with_ids(words: list) -> list:
+    """Numera le parole in ordine: l'id è la posizione nella lista."""
+    for i, w in enumerate(words):
+        w['id'] = i
+    return words
+
+
+def deepgram_words(items) -> list:
+    """
+    Converte le parole della risposta Deepgram nel formato interno.
+
+    :param items: Parole Deepgram (word, start, end e, se presenti,
+           punctuated_word e confidence)
+    :return: [{"id", "start", "end", "word", "text", "confidence"}, ...]
+    """
+    words = []
+    for w in items or []:
+        raw = getattr(w, 'word', None) or ''
+        text = (getattr(w, 'punctuated_word', None) or raw).strip()
+        if not text:
+            continue
+        words.append({
+            'start': float(w.start),
+            'end': float(w.end),
+            'word': normalize_word(raw or text),
+            'text': text,
+            'confidence': float(getattr(w, 'confidence', None) or 0.0),
+        })
+    return _with_ids(words)
+
+
+def whisper_words(segments) -> list:
+    """
+    Converte le parole dei segmenti Whisper nel formato interno
+    (i token vuoti vengono scartati).
+    """
+    words = []
+    for seg in segments or []:
+        for w in seg.get('words', []):
+            text = (w.get('word') or '').strip()
+            if not text:
+                continue
+            words.append({
+                'start': float(w['start']),
+                'end': float(w['end']),
+                'word': normalize_word(text),
+                'text': text,
+                'confidence': float(w.get('probability', 0.0)),
+            })
+    return _with_ids(words)
 
 
 def transcribe_deepgram(audio_path: str,
@@ -21,8 +85,7 @@ def transcribe_deepgram(audio_path: str,
     :param audio_path: Percorso del file audio (WAV)
     :param language: Lingua della trascrizione (default: it)
     :param model: Modello Deepgram (default: nova-3)
-    :return: {"text": str, "words": [{"start", "end", "word"}, ...]}
-             (liste vuote se fallita)
+    :return: {"text": str, "words": [...]} (liste vuote se fallita)
     """
     # Carica .env per ottenere la chiave API
     try:
@@ -61,15 +124,8 @@ def transcribe_deepgram(audio_path: str,
         alternative = response.results.channels[0].alternatives[0]
         text = alternative.transcript.strip()
 
-        # Estrai i timestamp a livello di parola (per tagli precisi sul parlato)
-        words = []
-        if alternative.words:
-            for w in alternative.words:
-                words.append({
-                    'start': float(w.start),
-                    'end': float(w.end),
-                    'word': w.word
-                })
+        # Parole con timestamp e punteggiatura (i «...» servono alla pulizia take)
+        words = deepgram_words(alternative.words)
 
         print(f"   ({len(words)} parole rilevate)")
         return {"text": text, "words": words}
@@ -88,8 +144,7 @@ def transcribe_whisper(audio_path: str,
     :param audio_path: Percorso del file audio (WAV)
     :param model_size: Dimensione del modello Whisper (tiny, base, small, medium, large)
     :param language: Lingua della trascrizione (default: it)
-    :return: {"text": str, "words": [{"start", "end", "word"}, ...]}
-             (liste vuote se fallita)
+    :return: {"text": str, "words": [...]} (liste vuote se fallita)
     """
     try:
         import whisper
@@ -103,16 +158,7 @@ def transcribe_whisper(audio_path: str,
         result = model.transcribe(audio_path, language=language, word_timestamps=True)
 
         text = result['text'].strip()
-
-        # Estrai i timestamp a livello di parola (per tagli precisi sul parlato)
-        words = []
-        for seg in result.get('segments', []):
-            for w in seg.get('words', []):
-                words.append({
-                    'start': float(w['start']),
-                    'end': float(w['end']),
-                    'word': w['word'].strip()
-                })
+        words = whisper_words(result.get('segments', []))
 
         print(f"   ({len(words)} parole rilevate)")
         return {"text": text, "words": words}
@@ -132,21 +178,69 @@ def transcribe_audio(audio_path: str,
     Deepgram è il metodo di default. Se Deepgram non è configurato o
     fallisce, viene fatto fallback automatico a Whisper.
 
-    :param audio_path: Percorso del file audio (WAV)
-    :param transcriber: Servizio da usare: "deepgram" (default) o "whisper"
-    :param whisper_model: Modello Whisper (usato solo con whisper o come fallback)
-    :param deepgram_model: Modello Deepgram (default: nova-3)
-    :param language: Lingua della trascrizione (default: it)
-    :return: {"text": str, "words": [{"start", "end", "word"}, ...]}
+    :return: {"text", "words", "transcriber", "model"}: transcriber e model
+             sono quelli effettivamente usati (dopo un eventuale fallback)
     """
     if transcriber == "deepgram":
         result = transcribe_deepgram(audio_path, language=language, model=deepgram_model)
         if result["text"]:
-            return result
+            return {**result, "transcriber": "deepgram", "model": deepgram_model}
         print("   Fallback a Whisper...")
-        return transcribe_whisper(audio_path, model_size=whisper_model, language=language)
 
-    return transcribe_whisper(audio_path, model_size=whisper_model, language=language)
+    result = transcribe_whisper(audio_path, model_size=whisper_model, language=language)
+    return {**result, "transcriber": "whisper", "model": whisper_model}
+
+
+def save_words_json(path: str, transcription: dict, video_path: str,
+                    video_duration: float, language: str) -> None:
+    """
+    Salva testo e parole in words.json, con i dati per riconoscere il video
+    (nome, dimensione, durata) e le opzioni usate.
+    """
+    data = {
+        'version': WORDS_FILE_VERSION,
+        'video': {
+            'name': Path(video_path).name,
+            'size': os.path.getsize(video_path),
+            'duration': round(video_duration, 3),
+        },
+        'transcriber': transcription.get('transcriber'),
+        'model': transcription.get('model'),
+        'language': language,
+        'text': transcription.get('text', ''),
+        'words': transcription.get('words', []),
+    }
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def load_words_json(path: str, video_path: str, video_duration: float,
+                    transcriber: str, language: str) -> Optional[dict]:
+    """
+    Riusa words.json se appartiene a questo video (nome, dimensione, durata
+    entro 0,1 s) ed è stato fatto con lo stesso servizio e la stessa lingua.
+
+    :return: {"text", "words", "transcriber", "model"} oppure None (file
+             mancante, illeggibile o di un altro video/opzioni)
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        video = data['video']
+        matches = (
+            data.get('version') == WORDS_FILE_VERSION
+            and video['name'] == Path(video_path).name
+            and video['size'] == os.path.getsize(video_path)
+            and abs(float(video['duration']) - video_duration) <= 0.1
+            and data['language'] == language
+            and data['transcriber'] == transcriber
+        )
+        if not matches:
+            return None
+        return {'text': data.get('text', ''), 'words': data['words'],
+                'transcriber': data['transcriber'], 'model': data.get('model')}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 if __name__ == '__main__':
