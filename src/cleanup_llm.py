@@ -253,6 +253,7 @@ def review_with_claude(words, dubious: List[Candidate], client, max_workers: int
     windows = make_windows(split_phrases(words), len(words))
     numbered = list(enumerate(dubious, start=1))
     assigned = assign_candidates(windows, numbered)
+    unassigned = len(numbered) - sum(len(v) for v in assigned.values())
 
     def work(idx):
         user_text = format_window(words, windows[idx], idx + 1, len(windows), assigned.get(idx, []))
@@ -279,5 +280,8 @@ def review_with_claude(words, dubious: List[Candidate], client, max_workers: int
         result.verdicts.update(verdicts)
         result.cuts.extend(cuts)
         result.warnings.extend(f"{label}: {w}" for w in warnings)
+    if unassigned:
+        result.warnings.append(f"{unassigned} candidati dubbi a cavallo tra due blocchi: "
+                               "nessun verdetto di Claude (applicati con marcatore)")
     result.cuts.sort(key=lambda c: (c.from_id, c.to_id))
     return result

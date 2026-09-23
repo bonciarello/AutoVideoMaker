@@ -78,3 +78,12 @@ def test_review_survives_malformed_response():
     client = FakeClient([_reply({"verdicts": [], "cuts": [{"from_id": 1}]})])
     result = review_with_claude(make_words("ciao a tutti"), [], client)
     assert result.failed_windows == 1
+
+
+def test_review_warns_about_candidates_outside_every_block():
+    words = make_words(" ".join(f"p{i}." for i in range(1700)))
+    dubious = [Candidate(1300, 1600, "retake", False, "")]
+    client = FakeClient([_reply({"verdicts": [], "cuts": []}), _reply({"verdicts": [], "cuts": []})])
+    result = review_with_claude(words, dubious, client)
+    assert result.verdicts == {}
+    assert any("nessun verdetto" in w for w in result.warnings)
