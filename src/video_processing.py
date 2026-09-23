@@ -5,6 +5,7 @@ Processa il video, genera segmenti, EDL e esporta i risultati.
 """
 
 import os
+import glob
 import re
 import subprocess
 import shutil
@@ -13,6 +14,54 @@ from typing import List, Tuple, Dict, Optional
 
 from utils import get_video_info, parse_fps
 from capcut_export import generate_capcut_project
+
+# Durata minima di un segmento tenuto (evita segmenti troppo corti che causano errori in FFmpeg)
+MIN_SEGMENT_DURATION = 0.1
+
+
+def compute_keep_ranges(silence_cuts: List[Tuple[float, float]],
+                        ai_cuts: List[Tuple[float, float]],
+                        video_duration: float) -> List[Tuple[float, float]]:
+    """
+    Segmenti da tenere: complemento dell'unione dei tagli (pause + pulizia).
+
+    :return: [(start, end), ...] ordinati; i segmenti più corti di
+             MIN_SEGMENT_DURATION vengono scartati
+    """
+    all_cuts = sorted(list(silence_cuts) + list(ai_cuts), key=lambda x: x[0])
+
+    merged_cuts = []
+    if all_cuts:
+        curr_start, curr_end = all_cuts[0]
+        for next_start, next_end in all_cuts[1:]:
+            if next_start < curr_end:
+                curr_end = max(curr_end, next_end)
+            else:
+                merged_cuts.append((curr_start, curr_end))
+                curr_start, curr_end = next_start, next_end
+        merged_cuts.append((curr_start, curr_end))
+
+    keep_ranges = []
+    current_pos = 0.0
+    for cs, ce in merged_cuts:
+        duration = cs - current_pos
+        if cs > current_pos and duration >= MIN_SEGMENT_DURATION:
+            keep_ranges.append((current_pos, cs))
+        current_pos = max(current_pos, ce)
+
+    final_duration = video_duration - current_pos
+    if final_duration >= MIN_SEGMENT_DURATION:
+        keep_ranges.append((current_pos, video_duration))
+    return keep_ranges
+
+
+def clear_old_chunks(chunks_dir: str) -> None:
+    """
+    Elimina i chunk di un'elaborazione precedente (c_*.mp4): se ora i
+    segmenti sono meno, resterebbero file vecchi mescolati ai nuovi.
+    """
+    for old_chunk in glob.glob(os.path.join(chunks_dir, "c_*.mp4")):
+        os.remove(old_chunk)
 
 
 def generate_edl(keep_ranges: List[Tuple[float, float]],
@@ -175,6 +224,7 @@ def cut_video_segments(video_path: str,
            con la voce ripulita dal rumore di fondo.
     """
     os.makedirs(chunks_dir, exist_ok=True)
+    clear_old_chunks(chunks_dir)
 
     use_vocals = bool(vocals_audio_path) and os.path.exists(vocals_audio_path)
     if vocals_audio_path and not use_vocals:
@@ -245,7 +295,8 @@ def process_and_export(video_path: str,
                       transcript_text: str = None,
                       save_transcript: bool = True,
                       vocals_audio_path: str = None,
-                      export_capcut: bool = True) -> Dict:
+                      export_capcut: bool = True,
+                      markers: Optional[List[Dict]] = None) -> Dict:
     """
     Processa ed esporta il video unendo silence_cuts e ai_cuts.
 
@@ -262,40 +313,11 @@ def process_and_export(video_path: str,
            i chunk video useranno la voce ripulita al posto dell'audio originale
     :param export_capcut: Se True, genera il progetto CapCut per questo video
            (default: True). Mettere False in modalità progetto combinato.
+    :param markers: Marcatori CapCut dei tagli dubbi [{"source_time", "title"}, ...] (opzionale)
     :return: Dict con "transcript_path" (o None) e "keep_ranges" (segmenti mantenuti)
     """
-    # 1. Unisci tutti i tagli e ordinali
-    all_cuts = silence_cuts + ai_cuts
-    all_cuts.sort(key=lambda x: x[0])
-
-    # 2. Unisci intervalli sovrapposti
-    merged_cuts = []
-    if all_cuts:
-        curr_start, curr_end = all_cuts[0]
-        for next_start, next_end in all_cuts[1:]:
-            if next_start < curr_end:
-                curr_end = max(curr_end, next_end)
-            else:
-                merged_cuts.append((curr_start, curr_end))
-                curr_start, curr_end = next_start, next_end
-        merged_cuts.append((curr_start, curr_end))
-
-    # 3. Calcola i segmenti da mantenere (inverso dei tagli)
-    # Durata minima del segmento in secondi (evita segmenti troppo corti che causano errori in FFmpeg)
-    MIN_SEGMENT_DURATION = 0.1
-
-    keep_ranges = []
-    current_pos = 0.0
-    for cs, ce in merged_cuts:
-        duration = cs - current_pos
-        if cs > current_pos and duration >= MIN_SEGMENT_DURATION:
-            keep_ranges.append((current_pos, cs))
-        current_pos = max(current_pos, ce)
-
-    # Aggiungi segmento finale se ha durata sufficiente
-    final_duration = video_duration - current_pos
-    if final_duration >= MIN_SEGMENT_DURATION:
-        keep_ranges.append((current_pos, video_duration))
+    # 1-3. Segmenti da mantenere (complemento dell'unione di pause e pulizia)
+    keep_ranges = compute_keep_ranges(silence_cuts, ai_cuts, video_duration)
 
     # Calcola statistiche
     stats = calculate_statistics(keep_ranges, video_duration)
@@ -337,7 +359,8 @@ def process_and_export(video_path: str,
                 clips=[{
                     "keep_ranges": keep_ranges,
                     "video_path": final_video_path,
-                    "video_info": video_info
+                    "video_info": video_info,
+                    "markers": markers or []
                 }],
                 project_name=Path(video_path).stem
             )

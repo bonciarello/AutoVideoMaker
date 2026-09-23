@@ -39,7 +39,9 @@ from dependency_check import check_dependencies
 from audio_extraction import extract_audio
 from silence_analysis import (analyze_audio_silence, merge_silence_intervals,
                               build_speech_segments_from_words, invert_segments)
-from transcription import transcribe_audio
+from transcription import transcribe_audio, load_words_json, save_words_json
+from cleanup import run_cleanup, write_report
+from cleanup_llm import make_client
 from video_processing import process_and_export, move_original_video
 from metadata_generation import generate_video_metadata
 from capcut_export import generate_capcut_project
@@ -93,7 +95,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
     :param args: Argomenti da linea di comando
     :param video_num: Numero del video corrente (per display)
     :param total_videos: Totale video da elaborare
-    :return: Dict con keep_ranges, video_path finale e video_info (per progetto CapCut combinato)
+    :return: Dict con keep_ranges, video_path finale, video_info e markers (per progetto CapCut combinato)
     """
     print("\n" + "="*100)
     if total_videos > 1:
@@ -105,6 +107,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
     # Determina il percorso di output: output/{nome_video}/
     video_name = Path(video_path).stem
     output_folder = os.path.join("output", video_name)
+    words_path = os.path.join(output_folder, "words.json")
 
     # ============================================================
     # ANALISI VIDEO INIZIALE
@@ -138,17 +141,28 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
         # ============================================================
         # FLUSSO 4: TRASCRIZIONE (con timestamp parola)
         # ============================================================
+        # Riusata da words.json se il video e le opzioni sono gli stessi:
+        # i rilanci non rifanno la chiamata al servizio di trascrizione.
         if args.no_transcription:
             transcription = {"text": "", "words": []}
         else:
-            log_phase(f"Trascrizione ({args.transcriber})")
-            transcription = transcribe_audio(
-                audio_path,
-                transcriber=args.transcriber,
-                whisper_model=args.whisper_model,
-                deepgram_model=args.deepgram_model,
-                language=args.language
-            )
+            cached = None if args.retranscribe else load_words_json(
+                words_path, video_path, video_duration, args.transcriber, args.language)
+            if cached:
+                log_phase("Trascrizione (riusata da words.json)")
+                print(f"{len(cached['words'])} parole, nessuna nuova trascrizione")
+                transcription = cached
+            else:
+                log_phase(f"Trascrizione ({args.transcriber})")
+                transcription = transcribe_audio(
+                    audio_path,
+                    transcriber=args.transcriber,
+                    whisper_model=args.whisper_model,
+                    deepgram_model=args.deepgram_model,
+                    language=args.language
+                )
+                if transcription["words"]:
+                    save_words_json(words_path, transcription, video_path, video_duration, args.language)
         transcript_text = transcription["text"]
         words = transcription["words"]
 
@@ -185,6 +199,28 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
             )
             print(f"Intervalli da rimuovere: {len(merged_silence)}")
 
+        # ============================================================
+        # PULIZIA TAKE (false partenze, ripetizioni, take rifatti)
+        # ============================================================
+        cleanup_mode = 'off' if args.no_transcription else args.cleanup
+        cleanup_result = None
+        if cleanup_mode != 'off':
+            if words:
+                log_phase("Pulizia take")
+                if transcription.get("transcriber") == "whisper":
+                    print("Attenzione: trascrizione Whisper, le frasi interrotte («...») "
+                          "saranno riconosciute raramente")
+                client = make_client() if cleanup_mode == 'full' else None
+                cleanup_result = run_cleanup(
+                    words, mode=cleanup_mode, cue_word=args.cue_word,
+                    audio_path=audio_path, video_duration=video_duration,
+                    pad=args.speech_pad, client=client
+                )
+            else:
+                print("Pulizia take saltata: nessuna parola trascritta")
+        ai_cuts = cleanup_result.time_cuts() if cleanup_result else []
+        markers = cleanup_result.markers() if cleanup_result else []
+
         # Determina nome base per i file
         name_no_ext = Path(video_path).stem + "_tagliato"
 
@@ -195,7 +231,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
         export_result = process_and_export(
             video_path=video_path,
             silence_cuts=merged_silence,
-            ai_cuts=[],  # Nessun taglio AI dal CLI per ora
+            ai_cuts=ai_cuts,
             video_duration=video_duration,
             output_folder=output_folder,
             video_info=video_info,
@@ -203,14 +239,18 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
             transcript_text=transcript_text,
             save_transcript=not args.no_transcription,
             vocals_audio_path=vocals_full_path,
-            export_capcut=not args.capcut_single_project
+            export_capcut=not args.capcut_single_project,
+            markers=markers
         )
         transcript_path = export_result["transcript_path"]
+        if cleanup_result:
+            write_report(output_folder, Path(video_path).name, cleanup_result, words,
+                         export_result["keep_ranges"], video_duration, merged_silence)
 
         # ============================================================
         # FLUSSO 6: GENERAZIONE METADATI AI
         # ============================================================
-        if transcript_path and not args.no_transcription:
+        if transcript_path and not args.no_transcription and not args.no_metadata:
             generate_video_metadata(transcript_path, output_folder)
 
     # ============================================================
@@ -231,11 +271,12 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
     return {
         "keep_ranges": export_result["keep_ranges"],
         "video_path": final_video_path,
-        "video_info": video_info
+        "video_info": video_info,
+        "markers": markers
     }
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Taglia automaticamente i silenzi da uno o più video",
         epilog="Esempi:\n"
@@ -281,6 +322,21 @@ def main():
                             'in sequenza sulla stessa timeline (invece di un progetto per video)')
     parser.add_argument('--capcut-name', type=str, default=None,
                        help='Nome del progetto CapCut combinato (default: nome del primo video)')
+    parser.add_argument('--cleanup', type=str, default='full', choices=['full', 'rules', 'off'],
+                       help="Pulizia take: 'full' regole + Claude (richiede ANTHROPIC_API_KEY), "
+                            "'rules' solo regole (gratis), 'off' solo pause (default: full)")
+    parser.add_argument('--cue-word', type=str, default='rifaccio',
+                       help="Parola-segnale detta da sola tra due pause per scartare il take appena "
+                            "sbagliato (default: rifaccio; stringa vuota per disattivarla)")
+    parser.add_argument('--retranscribe', action='store_true',
+                       help='Ignora words.json e rifà la trascrizione')
+    parser.add_argument('--no-metadata', action='store_true',
+                       help='Salta titolo, descrizione e miniatura AI (utile per i rilanci di prova)')
+    return parser
+
+
+def main():
+    parser = build_parser()
 
     args = parser.parse_args()
 
@@ -314,6 +370,11 @@ def main():
     print(f"Cut mode: {args.cut_mode}")
     if args.cut_mode != 'silence':
         print(f"Word gap: {args.word_gap}s | Speech pad: {args.speech_pad}s")
+    if not args.no_transcription:
+        cue = f" | parola-segnale: «{args.cue_word}»" if args.cue_word and args.cleanup != 'off' else ""
+        print(f"Pulizia take: {args.cleanup}{cue}")
+        if args.no_metadata:
+            print("Metadati AI: DISABLED")
     if args.capcut_single_project:
         print("CapCut: progetto combinato unico")
     print("="*100)

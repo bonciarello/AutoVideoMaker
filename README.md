@@ -246,6 +246,10 @@ python3 main.py videos/**/*.mp4
   --speech-pad 0.05 \     # Safety margin at speech segment edges (default: 0.05s)
   --capcut-single-project \ # One combined CapCut project for all videos
   --capcut-name MyProject   # Name of the combined CapCut project
+  --cleanup full \          # Take cleanup: full (rules + Claude), rules, off
+  --cue-word rifaccio \     # Cue word that discards the take just flubbed ("" disables it)
+  --retranscribe \          # Ignore the saved words.json and transcribe again
+  --no-metadata             # Skip AI title, description and thumbnail
 ```
 
 ### CapCut export modes
@@ -261,6 +265,32 @@ python3 main.py videos/**/*.mp4
 - **`speech`** (default when transcription is available): cuts are based on **word-level timestamps** from the transcription (Deepgram/Whisper). Cuts happen exactly between words - never mid-word - and remove breaths, coughs and long pauses. A safety pad protects word attack/release at the edges.
 - **`silence`**: cuts based on FFmpeg `silencedetect` volume analysis (use `-t`/`-d`/`-m` to tune). Used automatically as fallback with `--no-transcription` or when word timestamps are unavailable.
 - **`auto`** (default): uses `speech` when word timestamps are available, otherwise `silence`.
+
+### Take cleanup
+
+On top of pauses, AutoVideoMaker removes the typical mistakes of an unscripted recording:
+
+- **False starts**: a sentence interrupted and restarted right away ("Buongiorno a... Ciao a tutti")
+- **Stutters**: words repeated by mistake ("delle delle", "che che")
+- **Repeated takes**: the same sentence said again; the last complete version is kept
+- **Takes marked with the cue word**: say **"rifaccio"** on its own, between two pauses, then repeat the sentence; the flubbed take and the cue word are removed
+
+Content is never judged: anything you say only once stays in the video.
+
+Deterministic rules find the candidates; Claude (`claude-opus-5`) reviews the uncertain ones and finds rephrased self-corrections. Claude only points at word numbers: cut times come from the word timestamps, at the quietest point of each pause.
+
+Uncertain cuts are applied **and marked**: the CapCut project gets a timeline marker (not cyan, which is left for your own notes) on each of them, titled with the removed text. To undo one, drag the edge of the clip at the marker. Every cut is listed with its context in `pulizia.md` and `pulizia.json`.
+
+| Option | Description |
+|---|---|
+| `--cleanup full` | Rules + Claude (default, needs `ANTHROPIC_API_KEY`, about $0.30 for a 20-minute video) |
+| `--cleanup rules` | Rules only, free |
+| `--cleanup off` | Pauses only, as before |
+| `--cue-word WORD` | Cue word (default `rifaccio`; `--cue-word ""` disables it) |
+| `--retranscribe` | Ignore the saved `words.json` and transcribe again |
+| `--no-metadata` | Skip AI title, description and thumbnail (useful for test runs) |
+
+The transcription is saved in `output/<video>/words.json` and reused when you process the same video again, with no new Deepgram call. CapCut projects are never overwritten: a second run creates `<name>-2`.
 
 ### Choose the transcription service
 
@@ -319,6 +349,8 @@ The tool generates an `output/{video_name}/` folder containing:
 - `premiere_pro.edl` - EDL file for Premiere Pro editing
 - **CapCut project** - A ready-to-open project (named after the video file) automatically created in the CapCut drafts folder (`~/Movies/CapCut/User Data/Projects/com.lveditor.draft/`). Just open CapCut: the project appears in the home with the cut timeline (video + audio linked)
 - `transcript.txt` - Complete video transcription (if transcription enabled)
+- `words.json` - Word-level transcription with timestamps (reused on the next run)
+- `pulizia.md` / `pulizia.json` - Take cleanup report: every cut with type, context and reason
 - `metadata.txt` - AI-generated title, description, tags with Claude Opus 5 (if Anthropic configured)
 - `thumbnail.png` - AI-generated YouTube thumbnail with GPT Images 2 (if OpenAI configured)
 - `prompt.txt` - Prompt used to generate the thumbnail
@@ -379,6 +411,22 @@ The tool generates an `output/{video_name}/` folder containing:
 - FFmpeg
 - Deepgram API key (default transcription, free at [console.deepgram.com](https://console.deepgram.com/signup)) - optional, falls back to Whisper
 - ~5 GB of free space for AI models (Whisper/vocal separation, downloaded on first use)
+
+## Testing
+
+```bash
+source venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Manual check in CapCut (repeat after every CapCut major update: the draft format is reverse-engineered, tested with CapCut 9.4 on macOS):
+
+1. Close CapCut, run `./run.sh video.mov`, open CapCut: the project shows up in the home with today's date.
+2. Open it: no "damaged project" warning and no missing media.
+3. Timeline markers sit on the joins of the uncertain cuts, with the removed text as title and a non-cyan color.
+4. Drag the edge of the clip at a marker: the removed piece comes back.
+5. Edit something, save and reopen: CapCut keeps the project.
 
 ## Troubleshooting
 
