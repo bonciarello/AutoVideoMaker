@@ -1,5 +1,48 @@
-from tools.evaluate_cleanup import (cuts_breakdown, edl_keep_ranges, evaluate,
-                                    manual_keep_ranges, snap_to_frames)
+import json
+
+import pytest
+
+from tools.evaluate_cleanup import (cuts_breakdown, cuts_touching, edl_keep_ranges, evaluate,
+                                    load_labels, manual_keep_ranges, snap_to_frames, split_wrong)
+
+
+def test_load_labels_reads_ok_and_no(tmp_path):
+    path = tmp_path / "etichette.json"
+    path.write_text(json.dumps({"tagli": [{"from_id": 23, "to_id": 24, "label": "ok"},
+                                          {"from_id": 7, "to_id": 7, "label": "no"}]}), encoding="utf-8")
+    assert load_labels(str(path)) == {(23, 24): "ok", (7, 7): "no"}
+
+
+def test_load_labels_without_file_is_empty(tmp_path):
+    assert load_labels(str(tmp_path / "etichette.json")) == {}
+
+
+def test_load_labels_rejects_unknown_label(tmp_path):
+    path = tmp_path / "etichette.json"
+    path.write_text(json.dumps({"tagli": [{"from_id": 1, "to_id": 1, "label": "forse"}]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="forse"):
+        load_labels(str(path))
+
+
+def _three_cuts():
+    from cleanup import CleanupCut
+    return [CleanupCut(1, 1, "false_start", True, "claude", "", "a", 1.0, 2.0),
+            CleanupCut(3, 3, "repetition", True, "rule", "", "b", 3.0, 4.0),
+            CleanupCut(5, 5, "repetition", True, "rule", "", "c", 5.0, 6.0)]
+
+
+def test_split_wrong_assigns_each_tract_to_one_cause():
+    # 1,5–2 è sia nel taglio «no» sia in una pausa: conta come errore;
+    # 3,5–4 è sia nel taglio «ok» sia in una pausa: conta come approvato.
+    parts = split_wrong(wrong=[(1.0, 2.5), (3.0, 4.5), (5.0, 6.0), (8.0, 9.0)], cleanup_cuts=_three_cuts(),
+                        pause_cuts=[(1.5, 2.5), (3.5, 4.5)], labels={(1, 1): "no", (3, 3): "ok"}, fps=100.0)
+    assert parts == {"no": [(1.0, 2.0)], "unlabeled": [(5.0, 6.0)], "ok": [(3.0, 4.0)],
+                     "pause": [(2.0, 2.5), (4.0, 4.5)], "other": [(8.0, 9.0)]}
+
+
+def test_cuts_touching_lists_cuts_with_seconds_inside():
+    cuts = _three_cuts()
+    assert cuts_touching([(5.5, 7.0), (1.99, 3.0)], cuts, fps=100.0, min_len=0.025) == [(cuts[2], 0.5)]
 
 
 def test_manual_keep_ranges_reads_video_segments_of_the_right_file():
@@ -91,4 +134,8 @@ def test_main_runs_end_to_end_in_rules_mode(tmp_path, monkeypatch):
 
     results = list(bench.glob("risultati-*.md"))
     assert len(results) == 1
-    assert "| Tipo | Origine |" in results[0].read_text(encoding="utf-8")
+    report = results[0].read_text(encoding="utf-8")
+    assert "| Tipo | Origine |" in report
+    # a mano non è stato tolto niente: il taglio di «delle» (parola 1) è da etichettare
+    assert "## Da etichettare" in report
+    assert "- 1–1 (ripetizione, rule)" in report

@@ -428,6 +428,8 @@ Manual check in CapCut (repeat after every CapCut major update: the draft format
 4. Drag the edge of the clip at a marker: the removed piece comes back.
 5. Edit something, save and reopen: CapCut keeps the project.
 
+Benchmark against a video you finished by hand: copy its CapCut draft to `<output folder>/banco-prova/capcut-manuale/` and the original automatic EDL to `banco-prova/auto-originale.edl`, then run `python tools/evaluate_cleanup.py "<output folder>" --mode rules` (free; `--mode full` also calls Claude). A hand edit rarely removes every stutter, so the optional `banco-prova/etichette.json` marks the cleanup cuts you left in: `"ok"` (fine to cut) or `"no"` (a real mistake). The report splits the extra cuts into known mistakes, cuts still to label, approved cleanup and pauses.
+
 ## Troubleshooting
 
 ### FFmpeg not found

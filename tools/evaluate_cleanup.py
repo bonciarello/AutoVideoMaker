@@ -6,6 +6,10 @@ Confronta i tagli della pipeline con un montaggio rifinito a mano in CapCut
 (copia del draft in <cartella>/banco-prova/capcut-manuale/) e con i tagli
 automatici originali (<cartella>/banco-prova/auto-originale.edl).
 
+Il montaggio a mano non toglie ogni esitazione: <cartella>/banco-prova/etichette.json
+(facoltativo) dice quali tagli tenuti a mano vanno comunque bene («ok») e quali
+sono errori («no»), così i tagli in più si dividono per causa.
+
 Uso:
   python tools/evaluate_cleanup.py "output/2026-09-16 09-10-23" [--mode rules|full]
 """
@@ -22,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from intervals import complement, intersect, measure, subtract, union  # noqa: E402
 from silence_analysis import build_speech_segments_from_words, invert_segments  # noqa: E402
 from video_processing import compute_keep_ranges  # noqa: E402
-from cleanup import run_cleanup  # noqa: E402
+from cleanup import context_text, run_cleanup  # noqa: E402
 from cleanup_llm import make_client  # noqa: E402
 from cleanup_rules import KIND_LABELS  # noqa: E402
 
@@ -124,21 +128,90 @@ def cuts_breakdown(cleanup_cuts, pause_cuts: list, extra: list, manual_removed: 
     return rows
 
 
+LABELS = ("ok", "no")
+WRONG_CAUSES = ("no", "unlabeled", "ok", "pause")  # in ordine di precedenza
+
+
+def load_labels(path: str) -> dict:
+    """
+    Etichette dei tagli di pulizia che nel montaggio a mano sono rimasti:
+    «ok» = va bene tagliare (a mano non era stato tolto), «no» = da tenere
+    (errore della pipeline). File assente = nessuna etichetta.
+
+    :return: {(from_id, to_id): "ok" | "no"}
+    :raises ValueError: etichetta diversa da "ok" e "no"
+    """
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    labels = {}
+    for item in data.get("tagli", []):
+        label = item.get("label")
+        if label not in LABELS:
+            raise ValueError(f'etichetta sconosciuta {label!r} in {path}: usa "ok" o "no"')
+        labels[(int(item["from_id"]), int(item["to_id"]))] = label
+    return labels
+
+
+def split_wrong(wrong: list, cleanup_cuts, pause_cuts: list, labels: dict, fps: float,
+                min_len: float = 0.0) -> dict:
+    """
+    Divide i tagli in più (tolti dalla pipeline, tenuti a mano) per causa,
+    senza contare due volte lo stesso tratto: prima gli errori noti
+    (etichetta «no»), poi i tagli di pulizia da etichettare, quelli
+    approvati («ok») e le pause (ritmo scelto con --speech-pad). Resta
+    «other»: segmenti troppo corti eliminati e simili.
+    """
+    groups = {name: [] for name in WRONG_CAUSES}
+    for cut in cleanup_cuts:
+        groups[labels.get((cut.from_id, cut.to_id), "unlabeled")].append((cut.start, cut.end))
+    groups["pause"] = pause_cuts
+    parts, rest = {}, wrong
+    for name in WRONG_CAUSES:
+        parts[name] = intersect(rest, snap_to_frames(groups[name], fps))
+        rest = subtract(rest, parts[name])
+    parts["other"] = _drop_short(rest, min_len)
+    return parts
+
+
+def cuts_touching(intervals: list, cuts, fps: float, min_len: float) -> list:
+    """Tagli che cadono negli intervalli per almeno min_len secondi: [(taglio, secondi in comune)]."""
+    out = []
+    for cut in cuts:
+        inside = measure(intersect(intervals, snap_to_frames([(cut.start, cut.end)], fps)))
+        if inside >= min_len:
+            out.append((cut, inside))
+    return out
+
+
 def interval_text(words: list, start: float, end: float) -> str:
     """Parole che cadono (anche in parte) nell'intervallo."""
     inside = [w["text"] for w in words if w["start"] < end and w["end"] > start]
     return " ".join(inside) if inside else "(pausa)"
 
 
+def _cut_line(words: list, cut, seconds: float) -> str:
+    label = KIND_LABELS.get(cut.kind, cut.kind)
+    return (f"- {cut.from_id}–{cut.to_id} ({label}, {cut.source}): {seconds:.2f} s tenuti a mano — "
+            f"{context_text(words, cut.from_id, cut.to_id)}")
+
+
 def write_results(bench: str, mode: str, metrics: dict, words: list, result) -> str:
-    """Scrive banco-prova/risultati-<data-ora>.md con metriche, tagli in più e tagli mancati."""
+    """Scrive banco-prova/risultati-<data-ora>.md con metriche, tagli in più per causa e tagli mancati."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     path = os.path.join(bench, f"risultati-{stamp}.md")
     doubtful = sum(1 for c in result.cuts if not c.sure)
+    parts = metrics["wrong_parts"]
     lines = [f"# Banco di prova — {stamp}", "", f"Modalità: {mode}", "",
              f"- Tagli manuali oltre ai tagli automatici originali: {metrics['extra_seconds']:.1f} s",
              f"- Coperti dalla nuova pipeline: {metrics['covered_seconds']:.1f} s ({metrics['coverage']:.0%})",
              f"- Tagli in più (tolti dalla pipeline, tenuti a mano): {metrics['wrong_seconds']:.1f} s",
+             f"  - errori noti (etichetta «no»): {measure(parts['no']):.1f} s",
+             f"  - da etichettare: {measure(parts['unlabeled']):.1f} s",
+             f"  - pulizia approvata (etichetta «ok»): {measure(parts['ok']):.1f} s",
+             f"  - pause (ritmo scelto con --speech-pad): {measure(parts['pause']):.1f} s",
+             f"  - altro (segmenti troppo corti eliminati): {measure(parts['other']):.1f} s",
              f"- Tagli di pulizia: {len(result.cuts)} ({doubtful} dubbi)",
              "", "| Durata dei tagli manuali | Numero | Secondi | Coperti |", "|---|---|---|---|"]
     for b in metrics["buckets"]:
@@ -150,9 +223,18 @@ def write_results(bench: str, mode: str, metrics: dict, words: list, result) -> 
             label = "pausa" if r["kind"] == "pause" else KIND_LABELS.get(r["kind"], r["kind"])
             lines.append(f"| {label} | {r['source']} | {r['count']} | {r['seconds']:.1f} | "
                          f"{r['useful']:.1f} | {r['wrong']:.1f} |")
-    lines += ["", "## Tagli in più (da controllare)", ""]
-    for s, e in sorted(metrics["wrong"], key=lambda iv: iv[0] - iv[1])[:30]:
+    lines += ["", "## Errori noti", ""]
+    lines += [_cut_line(words, c, s) for c, s in metrics["known_errors"]] or ["Nessuno."]
+    lines += ["", "## Da etichettare", "",
+              "Tagli di pulizia tenuti a mano. Per ognuno aggiungi a `banco-prova/etichette.json` "
+              "una voce `{\"from_id\": …, \"to_id\": …, \"label\": \"ok\"}`: "
+              "«ok» se va bene tagliare, «no» se era da tenere.", ""]
+    lines += [_cut_line(words, c, s) for c, s in metrics["to_label"]] or ["Nessuno."]
+    lines += ["", "## Altri tagli in più", ""]
+    for s, e in sorted(parts["other"], key=lambda iv: iv[0] - iv[1])[:30]:
         lines.append(f"- {s:.2f}–{e:.2f} s ({e - s:.2f} s): {interval_text(words, s, e)}")
+    if not parts["other"]:
+        lines.append("Nessuno.")
     lines += ["", "## Tagli manuali mancati (i più lunghi)", ""]
     for s, e in sorted(metrics["missed"], key=lambda iv: iv[0] - iv[1])[:30]:
         lines.append(f"- {s:.2f}–{e:.2f} s ({e - s:.2f} s): {interval_text(words, s, e)}")
@@ -199,13 +281,22 @@ def main():
     result = run_cleanup(words, mode=args.mode, cue_word=args.cue_word, audio_path=audio_path,
                          video_duration=duration, pad=args.speech_pad, client=client)
     new_keep = snap_to_frames(compute_keep_ranges(pause_cuts, result.time_cuts(), duration), fps)
-    metrics = evaluate(manual_keep, auto_keep, new_keep, duration, min_len=1.5 / fps)
+    min_len = 1.5 / fps
+    metrics = evaluate(manual_keep, auto_keep, new_keep, duration, min_len=min_len)
     metrics["by_type"] = cuts_breakdown(result.cuts, pause_cuts, metrics["extra"],
                                         complement(manual_keep, duration))
+    labels = load_labels(os.path.join(bench, "etichette.json"))
+    parts = split_wrong(metrics["wrong"], result.cuts, pause_cuts, labels, fps, min_len)
+    metrics["wrong_parts"] = parts
+    metrics["known_errors"] = cuts_touching(
+        parts["no"], [c for c in result.cuts if labels.get((c.from_id, c.to_id)) == "no"], fps, min_len)
+    metrics["to_label"] = cuts_touching(
+        parts["unlabeled"], [c for c in result.cuts if (c.from_id, c.to_id) not in labels], fps, min_len)
 
     print(f"Tagli manuali in più: {metrics['extra_seconds']:.1f} s")
     print(f"Coperti: {metrics['covered_seconds']:.1f} s ({metrics['coverage']:.0%})")
-    print(f"Tagli in più: {metrics['wrong_seconds']:.1f} s")
+    print(f"Tagli in più: {metrics['wrong_seconds']:.1f} s "
+          f"(errori noti {measure(parts['no']):.1f} s, da etichettare {measure(parts['unlabeled']):.1f} s)")
     print(f"Risultati: {write_results(bench, args.mode, metrics, words, result)}")
 
 
