@@ -4,9 +4,17 @@ Shared utilities for AutoVideoMaker
 """
 
 import json
+import re
 import subprocess
+import unicodedata
 from fractions import Fraction
 from typing import Dict, Optional
+
+# Modello Claude usato per metadati e pulizia take
+CLAUDE_MODEL = 'claude-opus-5'
+
+# Punteggiatura e simboli ai bordi di una parola
+_EDGE_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$")
 
 
 def log_phase(phase_name: str) -> None:
@@ -47,3 +55,16 @@ def get_video_info(video_path: str) -> Dict:
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return json.loads(result.stdout)
+
+
+def normalize_word(text: str) -> str:
+    """
+    Forma normalizzata di una parola per i confronti: minuscolo, senza
+    punteggiatura ai bordi. Gli apostrofi interni restano ("dall'alto").
+
+    :param text: Parola così come trascritta (es. "Non", "è...", "«ciao»")
+    :return: Parola normalizzata (es. "non", "è", "ciao"); stringa vuota se
+             la parola è solo punteggiatura
+    """
+    t = unicodedata.normalize('NFC', text or '').lower().replace('’', "'")
+    return _EDGE_PUNCT_RE.sub('', t)

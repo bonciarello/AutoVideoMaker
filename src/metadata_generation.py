@@ -14,8 +14,8 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-# Modello Anthropic per la generazione dei metadati testuali
-CLAUDE_MODEL = 'claude-opus-5'
+# Modello Anthropic per i metadati testuali (condiviso con la pulizia take)
+from utils import CLAUDE_MODEL
 
 # Modello OpenAI per la generazione delle immagini di copertina
 OPENAI_IMAGE_MODEL = 'gpt-image-2'

@@ -46,6 +46,7 @@ env/
 *.edl
 *.json
 *.txt
+!requirements-dev.txt
 *.psd
 *.png
 
