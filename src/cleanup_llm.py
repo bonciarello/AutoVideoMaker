@@ -192,3 +192,92 @@ def validate_response(data: dict, words, window: Tuple[int, int], numbered: Numb
     if len(removed) > MAX_WINDOW_FRACTION * size:
         raise WindowRejected(f"Claude voleva togliere il {100 * len(removed) / size:.0f}% del blocco")
     return verdicts, cuts, warnings
+
+
+def make_client():
+    """Client Anthropic se ANTHROPIC_API_KEY è configurata (anche da .env), altrimenti None."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # dotenv non disponibile, usa le variabili d'ambiente del sistema
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return None
+    return anthropic.Anthropic()
+
+
+def ask_claude(client, user_text: str) -> dict:
+    """
+    Una richiesta a Claude con output strutturato (OUTPUT_SCHEMA) e
+    fallback server-side in caso di rifiuto.
+
+    :raises WindowRejected: risposta interrotta, rifiutata o senza JSON valido
+    """
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_text}],
+        output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
+        betas=[FALLBACK_BETA],
+        fallbacks="default",
+    )
+    if response.stop_reason in ("refusal", "max_tokens"):
+        raise WindowRejected(f"risposta interrotta (stop_reason: {response.stop_reason})")
+    text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
+    if not text:
+        raise WindowRejected("risposta senza testo")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise WindowRejected(f"JSON non valido: {e}") from e
+
+
+@dataclass
+class LlmResult:
+    """Esito della passata con Claude su tutti i blocchi."""
+    verdicts: Dict[int, Tuple[bool, bool]] = field(default_factory=dict)
+    cuts: List[Candidate] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    failed_windows: int = 0
+
+
+def review_with_claude(words, dubious: List[Candidate], client, max_workers: int = MAX_WORKERS) -> LlmResult:
+    """
+    Manda a Claude tutti i blocchi, in parallelo, con i candidati dubbi.
+
+    I candidati sono numerati da 1 nell'ordine di `dubious`: chi legge i
+    verdetti deve usare lo stesso ordine. Un blocco che fallisce non ferma
+    gli altri: i suoi candidati restano senza verdetto.
+    """
+    windows = make_windows(split_phrases(words), len(words))
+    numbered = list(enumerate(dubious, start=1))
+    assigned = assign_candidates(windows, numbered)
+
+    def work(idx):
+        user_text = format_window(words, windows[idx], idx + 1, len(windows), assigned.get(idx, []))
+        return validate_response(ask_claude(client, user_text), words, windows[idx], assigned.get(idx, []))
+
+    outcomes, errors = {}, {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(work, idx): idx for idx in range(len(windows))}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                outcomes[idx] = future.result()
+            except (anthropic.APIError, WindowRejected, KeyError, TypeError, ValueError) as e:
+                errors[idx] = e
+
+    result = LlmResult()
+    for idx in range(len(windows)):
+        label = f"blocco {idx + 1}/{len(windows)}"
+        if idx in errors:
+            result.failed_windows += 1
+            result.warnings.append(f"{label} senza Claude: {errors[idx]}")
+            continue
+        verdicts, cuts, warnings = outcomes[idx]
+        result.verdicts.update(verdicts)
+        result.cuts.extend(cuts)
+        result.warnings.extend(f"{label}: {w}" for w in warnings)
+    result.cuts.sort(key=lambda c: (c.from_id, c.to_id))
+    return result
