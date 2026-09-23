@@ -9,6 +9,10 @@ Il progetto viene scritto direttamente nella cartella dei draft di CapCut
 automaticamente nella home dell'app.
 
 Formato verificato con CapCut 9.x (macOS). I tempi sono in microsecondi.
+
+I tagli dubbi della pulizia take diventano marcatori della timeline
+(draft_info["time_marks"], formato letto da draft reali di CapCut 9.4).
+Un progetto esistente con lo stesso nome non viene mai sovrascritto.
 """
 
 import os
@@ -26,6 +30,11 @@ CAPCUT_DRAFTS_ROOT = os.path.expanduser(
 )
 
 MICROSECONDS = 1_000_000
+
+# Colore dei marcatori dei tagli dubbi: diverso dal ciano di default
+# (#00c1cd), che l'utente usa per le sue note. Valore della palette CapCut
+# letto da un marcatore creato a mano.
+MARKER_COLOR = "#00c1cd"
 
 
 def _uuid() -> str:
@@ -255,37 +264,55 @@ def _build_segment(material_uuid: str,
     }
 
 
-def generate_capcut_project(clips: List[Dict],
-                            project_name: str,
-                            drafts_root: Optional[str] = None) -> Optional[str]:
+def _unique_project_dir(root: str, project_name: str) -> Tuple[str, str]:
     """
-    Genera un progetto CapCut con la timeline dei video tagliati.
-
-    Supporta clip multiple: ogni clip diventa un materiale video e i suoi
-    segmenti vengono posti in sequenza sulla stessa traccia della timeline.
-
-    :param clips: Lista di clip, ognuna un dict con:
-                  - keep_ranges: segmenti mantenuti [(start, end), ...] in secondi
-                  - video_path: percorso del video sorgente (linkato, non copiato)
-                  - video_info: informazioni video da ffprobe
-    :param project_name: Nome del progetto CapCut
-    :param drafts_root: Cartella draft CapCut (default: percorso standard macOS)
-    :return: Percorso della cartella progetto, o None se errore
+    Nome e cartella liberi per il progetto: "nome", poi "nome-2", "nome-3"...
+    Un progetto esistente (magari rifinito a mano) non va mai sovrascritto.
     """
-    clips = [c for c in clips if c.get("keep_ranges")]
-    if not clips:
-        print("Nessun segmento da esportare nel progetto CapCut.")
+    name = project_name
+    suffix = 2
+    while os.path.exists(os.path.join(root, name)):
+        name = f"{project_name}-{suffix}"
+        suffix += 1
+    return name, os.path.join(root, name)
+
+
+def _marker_target_us(clip_segments: List[Tuple[int, int, int]], source_time: float, fps: float) -> int:
+    """
+    Posizione in timeline (µs) di un marcatore: l'inizio del primo segmento
+    della clip che parte dopo il taglio (la giunta). Se il taglio è dopo
+    l'ultimo segmento, la fine della clip in timeline.
+
+    :param clip_segments: [(source_start_us, target_start_us, duration_us), ...]
+    """
+    half_frame_us = (MICROSECONDS / fps) / 2 if fps > 0 else 0
+    source_us = _sec_to_us(source_time)
+    for source_start_us, target_start_us, _ in clip_segments:
+        if source_start_us >= source_us - half_frame_us:
+            return target_start_us
+    _, last_target_us, last_duration_us = clip_segments[-1]
+    return last_target_us + last_duration_us
+
+
+def _build_time_marks(mark_items: List[Dict]) -> Optional[Dict]:
+    """Marcatori della timeline (draft_info["time_marks"]); None se non ce ne sono."""
+    if not mark_items:
         return None
+    return {"id": _uuid(), "mark_items": sorted(mark_items, key=lambda m: m["time_range"]["start"])}
 
-    root = drafts_root or CAPCUT_DRAFTS_ROOT
-    if not os.path.isdir(root):
-        print(f"Cartella draft CapCut non trovata: {root}")
-        print("   CapCut non installato o mai avviato. Progetto non generato.")
-        return None
 
-    project_dir = os.path.join(root, project_name)
-    os.makedirs(project_dir, exist_ok=True)
+def build_draft(clips: List[Dict], project_name: str, project_dir: str,
+                drafts_root: str) -> Tuple[Dict, Dict, List[Dict], float]:
+    """
+    Costruzione pura del draft CapCut (nessuna scrittura su disco).
 
+    :param clips: come generate_capcut_project; ogni clip può avere
+           "markers": [{"source_time": secondi, "title": str}, ...]
+    :param project_name: Nome definitivo del progetto
+    :param project_dir: Cartella del progetto (scritta nel draft)
+    :param drafts_root: Cartella dei draft CapCut
+    :return: (draft_info, draft_meta_info, segmenti, fps)
+    """
     # Canvas e fps dal primo video (CapCut gestisce materiali misti)
     first_stream = next((s for s in clips[0]["video_info"]['streams'] if s['codec_type'] == 'video'), {})
     fps = parse_fps(first_stream)
@@ -343,6 +370,7 @@ def generate_capcut_project(clips: List[Dict],
     # target = posizione cumulativa nella timeline)
     segments = []
     target_start_us = 0
+    mark_items = []
 
     for clip in clips:
         material_uuid = _uuid()
@@ -351,6 +379,7 @@ def generate_capcut_project(clips: List[Dict],
         )
         materials["videos"].append(video_material)
 
+        clip_segments = []  # (source_start_us, target_start_us, duration_us) di questa clip
         for start, end in clip["keep_ranges"]:
             # Snap al frame: il taglio viene allineato alla griglia del
             # progetto, così l'inizio clip non può scivolare a 0.
@@ -364,7 +393,23 @@ def generate_capcut_project(clips: List[Dict],
                 material_uuid, source_start_us, source_end_us,
                 target_start_us, extra_refs, clip_duration_us
             ))
+            clip_segments.append((source_start_us, target_start_us, clip_duration_us))
             target_start_us += clip_duration_us
+
+        # Marcatori dei tagli dubbi: sulla giunta della timeline finale
+        for marker in clip.get("markers") or []:
+            try:
+                start_us = _marker_target_us(clip_segments, float(marker["source_time"]), fps)
+                title = str(marker["title"])
+            except (KeyError, TypeError, ValueError, IndexError) as e:
+                print(f"Attenzione: marcatore ignorato ({e!r})")
+                continue
+            mark_items.append({
+                "id": _uuid(),
+                "time_range": {"start": start_us, "duration": 0},
+                "color": MARKER_COLOR,
+                "title": title,
+            })
 
     total_duration_us = target_start_us
 
@@ -450,7 +495,7 @@ def generate_capcut_project(clips: List[Dict],
         "smart_ads_info": None,
         "source": "default",
         "static_cover_image_path": "",
-        "time_marks": None,
+        "time_marks": _build_time_marks(mark_items),
         "tracks": tracks,
         "uneven_animation_template_info": None,
         "update_time": now,
@@ -509,7 +554,7 @@ def generate_capcut_project(clips: List[Dict],
         }],
         "draft_name": project_name,
         "draft_new_version": "",
-        "draft_root_path": root,
+        "draft_root_path": drafts_root,
         "draft_timeline_materials_size_": 0,
         "draft_type": "",
         "tm_draft_cloud_completed": "",
@@ -520,7 +565,49 @@ def generate_capcut_project(clips: List[Dict],
         "tm_duration": total_duration_us
     }
 
+    return draft_info, draft_meta_info, segments, fps
+
+
+def generate_capcut_project(clips: List[Dict],
+                            project_name: str,
+                            drafts_root: Optional[str] = None) -> Optional[str]:
+    """
+    Genera un progetto CapCut con la timeline dei video tagliati.
+
+    Supporta clip multiple: ogni clip diventa un materiale video e i suoi
+    segmenti vengono posti in sequenza sulla stessa traccia della timeline.
+    Un progetto esistente con lo stesso nome non viene mai sovrascritto:
+    si crea "nome-2", "nome-3"...
+
+    :param clips: Lista di clip, ognuna un dict con:
+                  - keep_ranges: segmenti mantenuti [(start, end), ...] in secondi
+                  - video_path: percorso del video sorgente (linkato, non copiato)
+                  - video_info: informazioni video da ffprobe
+                  - markers (opzionale): [{"source_time": secondi, "title": str}, ...]
+    :param project_name: Nome del progetto CapCut
+    :param drafts_root: Cartella draft CapCut (default: percorso standard macOS)
+    :return: Percorso della cartella progetto, o None se errore
+    """
+    clips = [c for c in clips if c.get("keep_ranges")]
+    if not clips:
+        print("Nessun segmento da esportare nel progetto CapCut.")
+        return None
+
+    root = drafts_root or CAPCUT_DRAFTS_ROOT
+    if not os.path.isdir(root):
+        print(f"Cartella draft CapCut non trovata: {root}")
+        print("   CapCut non installato o mai avviato. Progetto non generato.")
+        return None
+
+    requested_name = project_name
+    project_name, project_dir = _unique_project_dir(root, project_name)
+    if project_name != requested_name:
+        print(f"Esiste già un progetto CapCut \"{requested_name}\": creo \"{project_name}\"")
+
+    draft_info, draft_meta_info, segments, fps = build_draft(clips, project_name, project_dir, root)
+
     try:
+        os.makedirs(project_dir)
         with open(os.path.join(project_dir, "draft_info.json"), 'w', encoding='utf-8') as f:
             json.dump(draft_info, f, ensure_ascii=False)
         with open(os.path.join(project_dir, "draft_meta_info.json"), 'w', encoding='utf-8') as f:
@@ -534,6 +621,8 @@ def generate_capcut_project(clips: List[Dict],
     # La tolleranza è mezza unità di frame: a 60fps il frame non è un numero
     # intero di microsecondi (16666.666...), quindi un residuo di
     # arrotondamento di pochi us è normale e NON è un disallineamento.
+    frame_us = MICROSECONDS / fps if fps > 0 else MICROSECONDS
+
     def _is_aligned(value: int) -> bool:
         if fps <= 0:
             return True
@@ -551,8 +640,11 @@ def generate_capcut_project(clips: List[Dict],
         print(f"Attenzione: {len(misaligned)} segmenti non allineati al frame ({fps} fps): "
               "CapCut potrebbe riallineare i tagli.")
 
+    marks = (draft_info.get("time_marks") or {}).get("mark_items", [])
     print(f"Progetto CapCut generato: {project_name}")
-    print(f"   ({len(materials['videos'])} clip, {len(segments)} segmenti, "
-          f"{total_duration_us / MICROSECONDS:.1f}s di timeline)")
-    print(f"   Apri CapCut: il progetto appare nella home.")
+    print(f"   ({len(draft_info['materials']['videos'])} clip, {len(segments)} segmenti, "
+          f"{draft_info['duration'] / MICROSECONDS:.1f}s di timeline)")
+    if marks:
+        print(f"   {len(marks)} marcatori da rivedere (tagli dubbi)")
+    print("   Apri CapCut: il progetto appare nella home.")
     return project_dir
