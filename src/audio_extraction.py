@@ -54,11 +54,21 @@ def extract_audio_with_vocal_separation(video_path: str, output_audio: str) -> O
     :param output_audio: Percorso output audio WAV per analisi
     :return: Percorso del file vocals completo per il video finale (o None se fallito)
     """
+    # L'import va fatto FUORI dal try principale: un ImportError qui significa
+    # davvero "pacchetto non installato". Importarlo dentro il try confondeva
+    # l'assenza di una dipendenza interna (es. audioread) con l'assenza di
+    # audio-separator stesso, mostrando un messaggio fuorviante.
     try:
         from audio_separator.separator import Separator
-        import sys
-        import io
+    except ImportError as e:
+        print(f"\naudio-separator non disponibile: {e}")
+        print("   Installa con: pip install 'audio-separator[cpu]'")
+        return None
 
+    import sys
+    import io
+
+    try:
         print("Estraendo audio dal video...", end='', flush=True)
         # Prima estrai l'audio grezzo in un file temporaneo
         temp_audio = output_audio.replace('.wav', '_temp.wav')
@@ -153,12 +163,8 @@ def extract_audio_with_vocal_separation(video_path: str, output_audio: str) -> O
                 os.remove(temp_audio)
             return None
 
-    except ImportError:
-        print("\naudio-separator non installato, uso estrazione standard")
-        print("   Installa con: pip install audio-separator")
-        return None
     except Exception as e:
-        print(f"\nErrore durante separazione vocals: {e}")
+        print(f"\nErrore durante separazione vocals: {e.__class__.__name__}: {e}")
         print("   Fallback a estrazione standard")
         return None
 

@@ -87,11 +87,25 @@ fi
 # Attiva virtual environment
 source venv/bin/activate
 
-# Installa/aggiorna dipendenze in ogni caso
-echo -e "${YELLOW}Verificando dipendenze...${NC}"
+# Installa/aggiorna dipendenze solo se requirements.txt è cambiato
+REQ_HASH_FILE="venv/.requirements_hash"
+requirements_hash() {
+    if command -v md5 &> /dev/null; then
+        md5 -q requirements.txt
+    else
+        md5sum requirements.txt | awk '{print $1}'
+    fi
+}
+
 if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt > /dev/null 2>&1
-    echo -e "${GREEN}✓ Dipendenze verificate e aggiornate${NC}\n"
+    CURRENT_HASH=$(requirements_hash)
+    SAVED_HASH=$(cat "$REQ_HASH_FILE" 2>/dev/null || echo "")
+    if [ "$CURRENT_HASH" != "$SAVED_HASH" ]; then
+        echo -e "${YELLOW}Installando/aggiornando dipendenze...${NC}"
+        pip install -r requirements.txt
+        echo "$CURRENT_HASH" > "$REQ_HASH_FILE"
+        echo -e "${GREEN}✓ Dipendenze aggiornate${NC}\n"
+    fi
 fi
 
 # Verifica che ci siano argomenti

@@ -7,7 +7,7 @@ This is the main file that orchestrates all processing flows:
 1. Dependency verification
 2. Audio extraction (with AI vocal separation)
 3. Silence analysis
-4. Whisper transcription
+4. AI transcription (Deepgram default, Whisper optional)
 5. Video processing and export
 6. AI metadata generation
 
@@ -34,13 +34,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 
 # Import dei moduli personalizzati da src/
-from utils import log_phase, get_video_info
+from utils import log_phase, get_video_info, parse_fps
 from dependency_check import check_dependencies
 from audio_extraction import extract_audio
-from silence_analysis import analyze_audio_silence, merge_silence_intervals
-from transcription import generate_subtitles_whisper
+from silence_analysis import (analyze_audio_silence, merge_silence_intervals,
+                              build_speech_segments_from_words, invert_segments)
+from transcription import transcribe_audio
 from video_processing import process_and_export, move_original_video
 from metadata_generation import generate_video_metadata
+from capcut_export import generate_capcut_project
 
 
 def expand_video_files(patterns: List[str]) -> List[str]:
@@ -61,6 +63,8 @@ def expand_video_files(patterns: List[str]) -> List[str]:
             # Se non ci sono match, prova come percorso diretto
             if os.path.exists(pattern):
                 matches = [pattern]
+            else:
+                print(f"Attenzione: nessun file trovato per '{pattern}'")
 
         # Filtra solo i file video
         for match in matches:
@@ -69,10 +73,19 @@ def expand_video_files(patterns: List[str]) -> List[str]:
                 if ext in video_extensions:
                     video_files.append(os.path.abspath(match))
 
-    return video_files
+    # Rimuovi duplicati mantenendo l'ordine (pattern sovrapposti possono
+    # selezionare lo stesso file più volte)
+    seen = set()
+    unique_files = []
+    for vf in video_files:
+        if vf not in seen:
+            seen.add(vf)
+            unique_files.append(vf)
+
+    return unique_files
 
 
-def process_single_video(video_path: str, args: argparse.Namespace, video_num: int = 0, total_videos: int = 1) -> None:
+def process_single_video(video_path: str, args: argparse.Namespace, video_num: int = 0, total_videos: int = 1) -> dict:
     """
     Elabora un singolo video.
 
@@ -80,6 +93,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
     :param args: Argomenti da linea di comando
     :param video_num: Numero del video corrente (per display)
     :param total_videos: Totale video da elaborare
+    :return: Dict con keep_ranges, video_path finale e video_info (per progetto CapCut combinato)
     """
     print("\n" + "="*100)
     if total_videos > 1:
@@ -99,7 +113,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
     video_info = get_video_info(video_path)
     video_duration = float(video_info['format']['duration'])
     video_stream = next((s for s in video_info['streams'] if s['codec_type'] == 'video'), None)
-    fps = eval(video_stream.get('r_frame_rate', '30/1')) if video_stream else 30.0
+    fps = parse_fps(video_stream)
     print(f"Durata: {video_duration:.2f}s, FPS: {fps:.2f}")
     print(f"Output: {output_folder}")
 
@@ -122,36 +136,54 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
         )
 
         # ============================================================
-        # FLUSSO 3: ANALISI SILENZI
+        # FLUSSO 4: TRASCRIZIONE (con timestamp parola)
         # ============================================================
-        log_phase("Analisi silenzi")
-        silence_intervals = analyze_audio_silence(
-            audio_path,
-            args.threshold,
-            args.duration
-        )
-
-        # ============================================================
-        # FLUSSO 4: TRASCRIZIONE WHISPER
-        # ============================================================
-        if args.no_whisper:
-            transcript_text = ""
+        if args.no_transcription:
+            transcription = {"text": "", "words": []}
         else:
-            log_phase("Trascrizione Whisper")
-            transcript_text = generate_subtitles_whisper(
-                video_path,
-                model_size=args.whisper_model
+            log_phase(f"Trascrizione ({args.transcriber})")
+            transcription = transcribe_audio(
+                audio_path,
+                transcriber=args.transcriber,
+                whisper_model=args.whisper_model,
+                deepgram_model=args.deepgram_model,
+                language=args.language
             )
+        transcript_text = transcription["text"]
+        words = transcription["words"]
 
         # ============================================================
-        # UNIONE INTERVALLI SILENZI
+        # FLUSSO 3: CALCOLO INTERVALLI DA TAGLIARE
         # ============================================================
-        log_phase("Unione intervalli silenzi")
-        merged_silence = merge_silence_intervals(
-            silence_intervals,
-            args.merge
-        )
-        print(f"Intervalli da rimuovere: {len(merged_silence)}")
+        # Modalità 'speech': tagli basati sui timestamp delle parole
+        # (precisi, non troncano le parole). Modalità 'silence':
+        # rilevamento silenzi FFmpeg. 'auto': speech se disponibile.
+        use_speech = args.cut_mode == 'speech' or (args.cut_mode == 'auto' and bool(words))
+
+        if use_speech and words:
+            log_phase("Segmenti parlati (da trascrizione)")
+            speech_segments = build_speech_segments_from_words(
+                words,
+                max_gap=args.word_gap,
+                pad=args.speech_pad,
+                video_duration=video_duration
+            )
+            merged_silence = invert_segments(speech_segments, video_duration)
+            print(f"Segmenti parlati: {len(speech_segments)} | Intervalli da rimuovere: {len(merged_silence)}")
+        else:
+            if args.cut_mode == 'speech' and not words:
+                print("Attenzione: timestamp delle parole non disponibili, uso rilevamento silenzi")
+            log_phase("Analisi silenzi")
+            silence_intervals = analyze_audio_silence(
+                audio_path,
+                args.threshold,
+                args.duration
+            )
+            merged_silence = merge_silence_intervals(
+                silence_intervals,
+                args.merge
+            )
+            print(f"Intervalli da rimuovere: {len(merged_silence)}")
 
         # Determina nome base per i file
         name_no_ext = Path(video_path).stem + "_tagliato"
@@ -160,7 +192,7 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
         # FLUSSO 5: ELABORAZIONE VIDEO E EXPORT
         # ============================================================
         log_phase("Export video e file")
-        transcript_path = process_and_export(
+        export_result = process_and_export(
             video_path=video_path,
             silence_cuts=merged_silence,
             ai_cuts=[],  # Nessun taglio AI dal CLI per ora
@@ -169,25 +201,38 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
             video_info=video_info,
             name_no_ext=name_no_ext,
             transcript_text=transcript_text,
-            save_transcript=not args.no_whisper,
-            vocals_audio_path=vocals_full_path
+            save_transcript=not args.no_transcription,
+            vocals_audio_path=vocals_full_path,
+            export_capcut=not args.capcut_single_project
         )
+        transcript_path = export_result["transcript_path"]
 
         # ============================================================
         # FLUSSO 6: GENERAZIONE METADATI AI
         # ============================================================
-        if transcript_path and not args.no_whisper:
+        if transcript_path and not args.no_transcription:
             generate_video_metadata(transcript_path, output_folder)
 
     # ============================================================
     # SPOSTA VIDEO ORIGINALE
     # ============================================================
-    move_original_video(video_path, output_folder)
+    # process_and_export ha già spostato il video (prima di generare il
+    # progetto CapCut, che deve linkare il percorso finale). Qui si usa il
+    # percorso risultante senza spostare di nuovo.
+    final_video_path = export_result.get("video_path") or video_path
+    if os.path.abspath(final_video_path) != os.path.abspath(os.path.join(output_folder, Path(video_path).name)):
+        final_video_path = move_original_video(video_path, output_folder)
 
     print("\n" + "="*100)
     print(f"COMPLETATO: {os.path.basename(video_path)}")
     print("="*100)
     print(f"Tutti i file sono stati salvati in: {output_folder}")
+
+    return {
+        "keep_ranges": export_result["keep_ranges"],
+        "video_path": final_video_path,
+        "video_info": video_info
+    }
 
 
 def main():
@@ -207,11 +252,35 @@ def main():
                        help='Durata minima del silenzio in secondi (default: 0.5)')
     parser.add_argument('-m', '--merge', type=float, default=1.0,
                        help='Distanza massima per unire silenzi vicini (default: 1.0s)')
+    parser.add_argument('--transcriber', type=str, default='deepgram',
+                       choices=['deepgram', 'whisper'],
+                       help='Servizio di trascrizione (default: deepgram, richiede DEEPGRAM_API_KEY nel file .env; fallback automatico a Whisper)')
     parser.add_argument('--whisper-model', type=str, default='medium',
                        choices=['tiny', 'base', 'small', 'medium', 'large'],
                        help='Modello Whisper per la trascrizione (default: medium)')
-    parser.add_argument('--no-whisper', action='store_true',
-                       help='Salta la generazione della trascrizione e metadati AI con Whisper/Gemini')
+    parser.add_argument('--deepgram-model', type=str, default='nova-3',
+                       help='Modello Deepgram per la trascrizione, es. nova-3, nova-2, enhanced (default: nova-3)')
+    parser.add_argument('--language', type=str, default='it',
+                       help='Lingua della trascrizione (default: it)')
+    parser.add_argument('--cut-mode', type=str, default='auto',
+                       choices=['auto', 'speech', 'silence'],
+                       help="Metodo di taglio: 'speech' usa i timestamp delle parole dalla trascrizione "
+                            "(più preciso, non tronca le parole), 'silence' usa il rilevamento silenzi "
+                            "FFmpeg, 'auto' usa speech quando disponibile (default: auto)")
+    parser.add_argument('--word-gap', type=float, default=0.2,
+                       help='Pausa massima tra parole nello stesso segmento parlato in secondi (default: 0.2). '
+                            'Pause piu lunghe vengono tagliate.')
+    parser.add_argument('--speech-pad', type=float, default=0.05,
+                       help='Margine di sicurezza ai bordi dei segmenti parlati in secondi (default: 0.05). '
+                            'Il silenzio residuo dopo ogni taglio vale 2*questo valore.')
+    parser.add_argument('--no-transcription', '--no-whisper', dest='no_transcription',
+                       action='store_true',
+                       help='Salta la trascrizione e la generazione di metadati AI')
+    parser.add_argument('--capcut-single-project', action='store_true',
+                       help='Con più video, genera UN solo progetto CapCut con tutte le clip '
+                            'in sequenza sulla stessa timeline (invece di un progetto per video)')
+    parser.add_argument('--capcut-name', type=str, default=None,
+                       help='Nome del progetto CapCut combinato (default: nome del primo video)')
 
     args = parser.parse_args()
 
@@ -235,10 +304,18 @@ def main():
     print(f"Threshold: {args.threshold} dB")
     print(f"Duration: {args.duration}s")
     print(f"Merge: {args.merge}s")
-    if not args.no_whisper:
-        print(f"Whisper model: {args.whisper_model}")
+    if not args.no_transcription:
+        print(f"Transcriber: {args.transcriber}")
+        if args.transcriber == 'whisper':
+            print(f"Whisper model: {args.whisper_model}")
+        print(f"Lingua: {args.language}")
     else:
-        print("Whisper: DISABLED")
+        print("Trascrizione: DISABLED")
+    print(f"Cut mode: {args.cut_mode}")
+    if args.cut_mode != 'silence':
+        print(f"Word gap: {args.word_gap}s | Speech pad: {args.speech_pad}s")
+    if args.capcut_single_project:
+        print("CapCut: progetto combinato unico")
     print("="*100)
 
     # ============================================================
@@ -251,13 +328,16 @@ def main():
     successful = 0
     failed = 0
     failed_videos = []
+    capcut_clips = []  # Clip per il progetto CapCut combinato
 
     # ============================================================
     # ELABORA OGNI VIDEO
     # ============================================================
     for idx, video_path in enumerate(video_files, 1):
         try:
-            process_single_video(video_path, args, idx, total_videos)
+            clip_info = process_single_video(video_path, args, idx, total_videos)
+            if clip_info:
+                capcut_clips.append(clip_info)
             successful += 1
         except Exception as e:
             failed += 1
@@ -267,6 +347,17 @@ def main():
             print(f"Errore: {e}")
             print(f"{'='*100}")
             # Continua con il prossimo video
+
+    # ============================================================
+    # PROGETTO CAPCUT COMBINATO (tutte le clip su una timeline)
+    # ============================================================
+    if args.capcut_single_project and capcut_clips:
+        log_phase("Progetto CapCut combinato")
+        project_name = args.capcut_name or Path(capcut_clips[0]["video_path"]).stem
+        try:
+            generate_capcut_project(capcut_clips, project_name=project_name)
+        except Exception as e:
+            print(f"Attenzione: generazione progetto CapCut combinato fallita: {e}")
 
     # ============================================================
     # RIEPILOGO FINALE

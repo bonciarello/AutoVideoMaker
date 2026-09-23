@@ -4,8 +4,9 @@ Shared utilities for AutoVideoMaker
 """
 
 import json
-from pathlib import Path
-from typing import Dict
+import subprocess
+from fractions import Fraction
+from typing import Dict, Optional
 
 
 def log_phase(phase_name: str) -> None:
@@ -13,19 +14,31 @@ def log_phase(phase_name: str) -> None:
     print(f"\n[{phase_name}]")
 
 
-def format_timestamp_srt(seconds: float) -> str:
-    """Formatta i secondi in formato timestamp SRT (HH:MM:SS,mmm)."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds % 1) * 1000)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+def parse_fps(video_stream: Optional[Dict], default: float = 30.0) -> float:
+    """
+    Estrae il frame rate da uno stream video ffprobe in modo sicuro (senza eval).
+
+    :param video_stream: Dizionario dello stream video da ffprobe
+    :param default: Valore di fallback se il frame rate non è disponibile
+    :return: Frame rate come float
+    """
+    if not video_stream:
+        return default
+
+    rate = video_stream.get('avg_frame_rate') or video_stream.get('r_frame_rate')
+    if not rate:
+        return default
+
+    try:
+        fps = float(Fraction(rate))
+    except (ValueError, ZeroDivisionError):
+        return default
+
+    return fps if fps > 0 else default
 
 
 def get_video_info(video_path: str) -> Dict:
     """Ottiene informazioni sul video usando ffprobe."""
-    import subprocess
-
     cmd = [
         'ffprobe', '-v', 'quiet',
         '-print_format', 'json',

@@ -36,18 +36,41 @@ def check_whisper() -> bool:
 
 
 def check_audio_separator() -> bool:
-    """Verifica che audio-separator sia installato."""
+    """Verifica che audio-separator sia installato E funzionante.
+
+    Oltre all'import controlla le dipendenze interne (audioread) perché il
+    pacchetto può risultare installato ma rompersi all'import: in quel caso
+    segnalarlo come assente evita l'errore fuorviante a runtime.
+    """
     try:
-        from audio_separator.separator import Separator
+        from audio_separator.separator import Separator  # noqa: F401
         return True
     except ImportError:
         return False
 
 
-def check_gemini() -> bool:
-    """Verifica che google-generativeai sia installato."""
+def check_deepgram() -> bool:
+    """Verifica che deepgram-sdk sia installato."""
     try:
-        import google.generativeai as genai
+        from deepgram import DeepgramClient
+        return True
+    except ImportError:
+        return False
+
+
+def check_anthropic() -> bool:
+    """Verifica che anthropic sia installato."""
+    try:
+        import anthropic
+        return True
+    except ImportError:
+        return False
+
+
+def check_openai() -> bool:
+    """Verifica che openai sia installato."""
+    try:
+        import openai
         return True
     except ImportError:
         return False
@@ -74,7 +97,9 @@ def check_all_dependencies(verbose: bool = True) -> Dict[str, bool]:
         'ffprobe': check_ffprobe(),
         'whisper': check_whisper(),
         'audio_separator': check_audio_separator(),
-        'gemini': check_gemini(),
+        'deepgram': check_deepgram(),
+        'anthropic': check_anthropic(),
+        'openai': check_openai(),
         'dotenv': check_dotenv()
     }
 

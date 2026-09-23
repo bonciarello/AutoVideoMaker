@@ -6,9 +6,18 @@ json5>=0.9.0
 python-dotenv>=1.0.0
 
 # Separazione vocale con AI (opzionale ma consigliato - per video_silence_cutter.py)
+# audioread: dipendenza interna di audio-separator (uvr_lib_v5) non sempre
+# installata automaticamente; senza di essa l'import fallisce e la
+# separazione vocale non parte.
 audio-separator[cpu]>=0.17.0
+audioread>=3.0.0
 
-# Generazione metadati con AI (opzionale - per generate_video_metadata.py)
-google-generativeai>=0.3.0
-google-genai>=0.2.0
+# Generazione metadati con AI (opzionale - per metadata_generation.py)
+# Metadati testuali: Claude Opus 5 (Anthropic) - richiede ANTHROPIC_API_KEY
+anthropic>=0.40.0
+# Thumbnail: GPT Images 2 (OpenAI) - richiede OPENAI_API_KEY
+openai>=1.50.0
 pillow>=10.0.0
+
+# Trascrizione con Deepgram (metodo di default - richiede DEEPGRAM_API_KEY)
+deepgram-sdk>=5.0.0
