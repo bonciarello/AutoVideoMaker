@@ -31,9 +31,10 @@ CAPCUT_DRAFTS_ROOT = os.path.expanduser(
 
 MICROSECONDS = 1_000_000
 
-# Colore dei marcatori dei tagli dubbi: diverso dal ciano di default
-# (#00c1cd), che l'utente usa per le sue note. Valore della palette CapCut
-# letto da un marcatore creato a mano.
+# Colore dei marcatori dei tagli dubbi. Per ora è il ciano di default di
+# CapCut (#00c1cd), lo stesso delle note manuali: i marcatori automatici si
+# riconoscono dal titolo (tipo e testo tolto). Per usare un altro colore
+# della palette, leggerlo da un marcatore creato a mano in CapCut.
 MARKER_COLOR = "#00c1cd"
 
 

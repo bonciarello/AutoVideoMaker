@@ -334,9 +334,7 @@ Per un taglio delle parole a…b, con `prev` = a−1 e `next` = b+1:
   UUID, "time_range": {"start": µs, "duration": 0}, "color": MARKER_COLOR,
   "title": "…"}]}`; senza marcatori resta `None` come oggi.
 - Titolo: `"<tipo>: «<testo tolto>»"`, al massimo 60 caratteri con «…».
-- `MARKER_COLOR`: un colore della palette CapCut diverso da `#00c1cd`,
-  ricavato in implementazione da un draft reale (creare un marcatore in
-  CapCut, cambiarne il colore, leggere il JSON).
+- `MARKER_COLOR`: per ora il ciano di default `#00c1cd` (nessun colore della palette ricavato, Ruling 1): i marcatori automatici si distinguono dal titolo. Per cambiarlo, leggere il colore da un marcatore creato a mano in CapCut.
 - **Mai sovrascrivere**: se la cartella esiste si usa `nome-2`, `nome-3`…;
   `name` e `draft_name` usano il nome finale, che viene stampato.
 
@@ -449,7 +447,7 @@ Criteri provvisori, da confermare dopo la prima misura:
 
 1. CapCut 9.4 apre un draft con `time_marks` scritti da noi (verifica
    manuale).
-2. Valore di `MARKER_COLOR` dalla palette CapCut.
+2. Valore di `MARKER_COLOR`: fallback `#00c1cd` finché non si ricava un colore della palette.
 3. ✅ Verificato in fase di piano: `anthropic` 0.120.2 accetta `output_config`,
    `betas` e `fallbacks="default"` su `client.beta.messages.create`; la
    versione minima in `requirements.txt` sale a `anthropic>=0.120.2`.

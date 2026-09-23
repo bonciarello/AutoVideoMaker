@@ -279,7 +279,7 @@ Content is never judged: anything you say only once stays in the video.
 
 Deterministic rules find the candidates; Claude (`claude-opus-5`) reviews the uncertain ones and finds rephrased self-corrections. Claude only points at word numbers: cut times come from the word timestamps, at the quietest point of each pause.
 
-Uncertain cuts are applied **and marked**: the CapCut project gets a timeline marker (not cyan, which is left for your own notes) on each of them, titled with the removed text. To undo one, drag the edge of the clip at the marker. Every cut is listed with its context in `pulizia.md` and `pulizia.json`.
+Uncertain cuts are applied **and marked**: the CapCut project gets a timeline marker on each of them, titled with the cut type and the removed text so you can tell it from your own markers. To undo one, drag the edge of the clip at the marker. Every cut is listed with its context in `pulizia.md` and `pulizia.json`.
 
 | Option | Description |
 |---|---|
@@ -424,7 +424,7 @@ Manual check in CapCut (repeat after every CapCut major update: the draft format
 
 1. Close CapCut, run `./run.sh video.mov`, open CapCut: the project shows up in the home with today's date.
 2. Open it: no "damaged project" warning and no missing media.
-3. Timeline markers sit on the joins of the uncertain cuts, with the removed text as title and a non-cyan color.
+3. Timeline markers sit on the joins of the uncertain cuts, titled with the cut type and the removed text.
 4. Drag the edge of the clip at a marker: the removed piece comes back.
 5. Edit something, save and reopen: CapCut keeps the project.
 
