@@ -24,6 +24,7 @@ from silence_analysis import build_speech_segments_from_words, invert_segments  
 from video_processing import compute_keep_ranges  # noqa: E402
 from cleanup import run_cleanup  # noqa: E402
 from cleanup_llm import make_client  # noqa: E402
+from cleanup_rules import KIND_LABELS  # noqa: E402
 
 BUCKETS = [(0.0, 0.3, "< 0,3 s"), (0.3, 1.0, "0,3–1 s"), (1.0, float("inf"), "> 1 s")]
 
@@ -89,6 +90,26 @@ def evaluate(manual_keep: list, auto_keep: list, new_keep: list, duration: float
     }
 
 
+def cuts_breakdown(cleanup_cuts, pause_cuts: list, extra: list, manual_removed: list) -> list:
+    """
+    Tagli automatici per tipo e origine (pause comprese): quanti sono, quanti
+    secondi tolgono, quanti cadono nei tagli manuali in più (E, utili) e
+    quanti in parti che a mano erano state tenute (in più).
+    """
+    groups = {}
+    for s, e in pause_cuts:
+        groups.setdefault(("pause", "pause"), []).append((s, e))
+    for cut in cleanup_cuts:
+        groups.setdefault((cut.kind, cut.source), []).append((cut.start, cut.end))
+    rows = []
+    for (kind, source), items in sorted(groups.items()):
+        rows.append({"kind": kind, "source": source, "count": len(items),
+                     "seconds": measure(items),
+                     "useful": measure(intersect(items, extra)),
+                     "wrong": measure(subtract(items, manual_removed))})
+    return rows
+
+
 def interval_text(words: list, start: float, end: float) -> str:
     """Parole che cadono (anche in parte) nell'intervallo."""
     inside = [w["text"] for w in words if w["start"] < end and w["end"] > start]
@@ -108,6 +129,13 @@ def write_results(bench: str, mode: str, metrics: dict, words: list, result) -> 
              "", "| Durata dei tagli manuali | Numero | Secondi | Coperti |", "|---|---|---|---|"]
     for b in metrics["buckets"]:
         lines.append(f"| {b['label']} | {b['count']} | {b['seconds']:.1f} | {b['covered']:.1f} |")
+    if metrics.get("by_type"):
+        lines += ["", "| Tipo | Origine | Tagli | Secondi | Utili (nei tagli manuali in più) | In più (tenuti a mano) |",
+                  "|---|---|---|---|---|---|"]
+        for r in metrics["by_type"]:
+            label = "pausa" if r["kind"] == "pause" else KIND_LABELS.get(r["kind"], r["kind"])
+            lines.append(f"| {label} | {r['source']} | {r['count']} | {r['seconds']:.1f} | "
+                         f"{r['useful']:.1f} | {r['wrong']:.1f} |")
     lines += ["", "## Tagli in più (da controllare)", ""]
     for s, e in sorted(metrics["wrong"], key=lambda iv: iv[0] - iv[1])[:30]:
         lines.append(f"- {s:.2f}–{e:.2f} s ({e - s:.2f} s): {interval_text(words, s, e)}")
@@ -158,6 +186,8 @@ def main():
                          video_duration=duration, pad=args.speech_pad, client=client)
     new_keep = compute_keep_ranges(pause_cuts, result.time_cuts(), duration)
     metrics = evaluate(manual_keep, auto_keep, new_keep, duration)
+    metrics["by_type"] = cuts_breakdown(result.cuts, pause_cuts, metrics["extra"],
+                                        complement(manual_keep, duration))
 
     print(f"Tagli manuali in più: {metrics['extra_seconds']:.1f} s")
     print(f"Coperti: {metrics['covered_seconds']:.1f} s ({metrics['coverage']:.0%})")

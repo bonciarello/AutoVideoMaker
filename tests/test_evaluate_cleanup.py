@@ -1,4 +1,4 @@
-from tools.evaluate_cleanup import edl_keep_ranges, evaluate, manual_keep_ranges
+from tools.evaluate_cleanup import cuts_breakdown, edl_keep_ranges, evaluate, manual_keep_ranges
 
 
 def test_manual_keep_ranges_reads_video_segments_of_the_right_file():
@@ -29,3 +29,15 @@ def test_evaluate_coverage_and_extra_cuts():
     assert m["wrong_seconds"] == 1.0
     assert [b["label"] for b in m["buckets"]] == ["< 0,3 s", "0,3–1 s", "> 1 s"]
     assert m["buckets"][2]["seconds"] == 2.0
+
+
+def test_cuts_breakdown_by_type_and_origin():
+    from cleanup import CleanupCut
+    cuts = [CleanupCut(0, 1, "false_start", False, "rule", "", "x", 2.0, 3.0),
+            CleanupCut(5, 5, "repetition", True, "claude", "", "y", 9.0, 9.5)]
+    rows = cuts_breakdown(cuts, pause_cuts=[(3.0, 3.5)], extra=[(2.0, 4.0)], manual_removed=[(2.0, 4.0)])
+    by_key = {(r["kind"], r["source"]): r for r in rows}
+    assert by_key[("false_start", "rule")]["useful"] == 1.0
+    assert by_key[("false_start", "rule")]["wrong"] == 0.0
+    assert by_key[("repetition", "claude")]["wrong"] == 0.5
+    assert by_key[("pause", "pause")]["useful"] == 0.5
