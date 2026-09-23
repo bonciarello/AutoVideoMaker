@@ -87,6 +87,21 @@ def expand_video_files(patterns: List[str]) -> List[str]:
     return unique_files
 
 
+def cleanup_or_none(words, mode, cue_word, audio_path, video_duration, pad):
+    """
+    Pulizia take protetta: un errore imprevisto non deve far fallire il video
+    (spec). In caso di errore si esportano solo i tagli delle pause.
+    """
+    try:
+        client = make_client() if mode == 'full' else None
+        return run_cleanup(words, mode=mode, cue_word=cue_word, audio_path=audio_path,
+                           video_duration=video_duration, pad=pad, client=client)
+    except Exception as e:  # la pulizia non fa mai fallire il video
+        print(f"Attenzione: pulizia take non riuscita ({e.__class__.__name__}: {e}): "
+              "esporto solo i tagli delle pause")
+        return None
+
+
 def process_single_video(video_path: str, args: argparse.Namespace, video_num: int = 0, total_videos: int = 1) -> dict:
     """
     Elabora un singolo video.
@@ -210,12 +225,8 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
                 if transcription.get("transcriber") == "whisper":
                     print("Attenzione: trascrizione Whisper, le frasi interrotte («...») "
                           "saranno riconosciute raramente")
-                client = make_client() if cleanup_mode == 'full' else None
-                cleanup_result = run_cleanup(
-                    words, mode=cleanup_mode, cue_word=args.cue_word,
-                    audio_path=audio_path, video_duration=video_duration,
-                    pad=args.speech_pad, client=client
-                )
+                cleanup_result = cleanup_or_none(words, cleanup_mode, args.cue_word, audio_path,
+                                                 video_duration, args.speech_pad)
             else:
                 print("Pulizia take saltata: nessuna parola trascritta")
         ai_cuts = cleanup_result.time_cuts() if cleanup_result else []
@@ -244,8 +255,11 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
         )
         transcript_path = export_result["transcript_path"]
         if cleanup_result:
-            write_report(output_folder, Path(video_path).name, cleanup_result, words,
-                         export_result["keep_ranges"], video_duration, merged_silence)
+            try:
+                write_report(output_folder, Path(video_path).name, cleanup_result, words,
+                             export_result["keep_ranges"], video_duration, merged_silence)
+            except Exception as e:  # il report non deve far fallire il video
+                print(f"Attenzione: report della pulizia non scritto ({e.__class__.__name__}: {e})")
 
         # ============================================================
         # FLUSSO 6: GENERAZIONE METADATI AI

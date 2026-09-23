@@ -387,7 +387,8 @@ La pulizia non fa mai fallire il video:
 - errore, rifiuto o risposta non valida di Claude su un blocco → solo regole
   per quel blocco, avviso in console e nel report;
 - calcolo dei marcatori fallito → progetto CapCut senza marcatori, avviso;
-- `words.json` illeggibile → si ritrascrive.
+- `words.json` illeggibile → si ritrascrive;
+- errore imprevisto nella pulizia o nel report → video esportato con i soli tagli delle pause, avviso in console.
 
 ## Testing
 
