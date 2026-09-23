@@ -1,10 +1,13 @@
+import json
+from types import SimpleNamespace
+
 import numpy as np
 
-from cleanup import (Energy, cut_end_time, cut_start_time, marker_title,
-                     merge_applied, resolve_outcomes, run_cleanup,
+from cleanup import (Energy, canonical_repetition, cut_end_time, cut_start_time,
+                     marker_title, merge_applied, resolve_outcomes, run_cleanup,
                      source_to_timeline)
 from cleanup_llm import LlmResult
-from cleanup_rules import Candidate
+from cleanup_rules import Candidate, normalized
 from helpers import make_words
 
 
@@ -137,3 +140,40 @@ def test_run_cleanup_without_words_returns_empty_and_skips_claude():
     result = run_cleanup([], mode="full", cue_word="rifaccio", audio_path=None,
                          video_duration=5.0, pad=0.05, client=Boom())
     assert result.cuts == [] and result.kept == []
+
+
+class _OneReplyClient:
+    """Client finto: ogni richiesta riceve la stessa risposta JSON."""
+
+    def __init__(self, data):
+        reply = SimpleNamespace(stop_reason="end_turn",
+                                content=[SimpleNamespace(type="text", text=json.dumps(data))])
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: reply))
+
+
+def test_canonical_repetition_moves_claude_cut_to_the_first_occurrence():
+    norm = normalized(make_words("Lui dice che che si è dimesso"))
+    second = Candidate(3, 3, "repetition", True, "", source="claude")
+    both = Candidate(2, 3, "repetition", True, "", source="claude")
+    other = Candidate(4, 5, "false_start", True, "", source="claude")
+    assert (canonical_repetition(second, norm).from_id, canonical_repetition(second, norm).to_id) == (2, 2)
+    assert (canonical_repetition(both, norm).from_id, canonical_repetition(both, norm).to_id) == (2, 2)
+    assert canonical_repetition(other, norm) == other
+
+
+def test_rule_and_claude_on_the_same_stutter_keep_one_occurrence():
+    words = make_words("Lui dice che che si è dimesso da Anthropic")
+    client = _OneReplyClient({"verdicts": [], "cuts": [
+        {"from_id": 3, "to_id": 3, "kind": "repetition", "sure": True, "reason": "inciampo"}]})
+    result = run_cleanup(words, mode="full", cue_word="rifaccio", audio_path=None,
+                         video_duration=10.0, pad=0.05, client=client)
+    assert [(c.from_id, c.to_id) for c in result.cuts] == [(2, 2)]
+
+
+def test_triple_repetition_still_keeps_the_last_occurrence_with_claude():
+    words = make_words("che che che bello davvero oggi qui con tutti voi amici")
+    client = _OneReplyClient({"verdicts": [], "cuts": [
+        {"from_id": 1, "to_id": 2, "kind": "repetition", "sure": True, "reason": "inciampo"}]})
+    result = run_cleanup(words, mode="full", cue_word="rifaccio", audio_path=None,
+                         video_duration=10.0, pad=0.05, client=client)
+    assert [(c.from_id, c.to_id) for c in result.cuts] == [(0, 1)]

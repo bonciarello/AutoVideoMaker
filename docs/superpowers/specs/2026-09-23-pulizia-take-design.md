@@ -145,7 +145,7 @@ Taglio (interno e in `pulizia.json`):
 ```
 
 `kind`: `cue_word`, `false_start`, `self_correction`, `repetition`, `retake`.
-Etichette italiane in report e marcatori: «rifaccio», «falsa partenza»,
+Etichette italiane in report e marcatori: «parola-segnale», «falsa partenza»,
 «autocorrezione», «ripetizione», «take ripetuto».
 
 ## Regole deterministiche (`cleanup_rules.py`)
@@ -299,6 +299,10 @@ Prompt di sistema (stabile, in italiano):
 
 - Tagli sovrapposti o adiacenti si uniscono a livello di parola; il taglio
   unito è sicuro solo se lo sono tutti i componenti.
+- I tagli di Claude su una ripetizione vengono prima spostati sulla prima
+  occorrenza (come le regole): se tolgono «X X» per intero restano con la
+  sola prima X, se tolgono la seconda X passano alla prima. Così un
+  inciampo non perde mai entrambe le occorrenze.
 - Senza chiave Anthropic o con `--cleanup rules`: solo regole, i dubbi
   applicati con marcatore.
 

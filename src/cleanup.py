@@ -11,13 +11,13 @@ import json
 import math
 import os
 import wave
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from cleanup_llm import LlmResult, review_with_claude
-from cleanup_rules import KIND_LABELS, Candidate, run_rules
+from cleanup_rules import KIND_LABELS, REPETITION_MAX_N, Candidate, normalized, run_rules
 from intervals import measure
 
 TOUCH_GAP = 0.02        # pausa (s) sotto la quale due parole sono "attaccate"
@@ -105,6 +105,28 @@ def cut_end_time(words, b: int, pad: float, energy: Optional[Energy], video_dura
         return _quietest(energy, end, next_start)
     mid = (end + next_start) / 2
     return _quietest(energy, mid - TOUCH_WINDOW, mid + TOUCH_WINDOW)
+
+
+def canonical_repetition(cand: Candidate, norm: List[str]) -> Candidate:
+    """
+    Un taglio su una ripetizione deve togliere una sola occorrenza, la prima,
+    come fanno le regole. Così il taglio di Claude e quello delle regole sullo
+    stesso inciampo coincidono invece di togliere entrambe le occorrenze
+    («Lui dice [che che] si è dimesso» deve lasciare un «che»).
+    """
+    a, b = cand.from_id, cand.to_id
+    n = b - a + 1
+    seg = norm[a:b + 1]
+    if not all(seg):
+        return cand
+    half = n // 2
+    # tolte entrambe le occorrenze («che che»): resta la seconda
+    if n % 2 == 0 and half <= REPETITION_MAX_N and seg[:half] == seg[half:]:
+        return replace(cand, to_id=a + half - 1)
+    # tolta la seconda occorrenza: si toglie la prima, come le regole
+    if n <= REPETITION_MAX_N and a - n >= 0 and norm[a - n:a] == seg:
+        return replace(cand, from_id=a - n, to_id=a - 1)
+    return cand
 
 
 def resolve_outcomes(rule_cands: List[Candidate], dubious: List[Candidate],
@@ -215,6 +237,10 @@ def run_cleanup(words, mode: str, cue_word: str, audio_path: Optional[str],
         else:
             llm = review_with_claude(words, dubious, client)
             result.warnings.extend(llm.warnings)
+            # I tagli di Claude sulle ripetizioni tolgono la prima occorrenza,
+            # come le regole: un inciampo non perde mai entrambe le occorrenze
+            norm = normalized(words)
+            llm.cuts = [canonical_repetition(c, norm) for c in llm.cuts]
 
     applied, kept = resolve_outcomes(rule_cands, dubious, llm)
 
