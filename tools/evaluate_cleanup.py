@@ -62,17 +62,30 @@ def edl_keep_ranges(edl_path: str, fps: float) -> list:
     return union(ranges)
 
 
-def evaluate(manual_keep: list, auto_keep: list, new_keep: list, duration: float) -> dict:
+def snap_to_frames(intervals: list, fps: float) -> list:
+    """Allinea gli intervalli alla griglia dei frame, come fanno EDL e CapCut."""
+    return union((round(s * fps) / fps, round(e * fps) / fps) for s, e in intervals)
+
+
+def _drop_short(intervals: list, min_len: float) -> list:
+    """Scarta le schegge più corte di min_len: arrotondamenti al frame, non tagli veri."""
+    return [(s, e) for s, e in intervals if e - s >= min_len]
+
+
+def evaluate(manual_keep: list, auto_keep: list, new_keep: list, duration: float, min_len: float = 0.0) -> dict:
     """
     M = tolto a mano, B = tolto dalla versione automatica originale,
     E = M \\ B (i tagli fatti a mano in più), A = tolto dalla nuova pipeline.
+
+    :param min_len: schegge più corte di così (arrotondamenti al frame, non
+           tagli veri) sono scartate da extra, wrong e missed.
     """
     manual_removed = complement(manual_keep, duration)
     auto_removed = complement(auto_keep, duration)
     new_removed = complement(new_keep, duration)
-    extra = subtract(manual_removed, auto_removed)
+    extra = _drop_short(subtract(manual_removed, auto_removed), min_len)
     covered = intersect(new_removed, extra)
-    wrong = subtract(new_removed, manual_removed)
+    wrong = _drop_short(subtract(new_removed, manual_removed), min_len)
     buckets = []
     for lo, hi, label in BUCKETS:
         items = [(s, e) for s, e in extra if lo <= e - s < hi]
@@ -86,7 +99,7 @@ def evaluate(manual_keep: list, auto_keep: list, new_keep: list, duration: float
         "coverage": measure(covered) / extra_seconds if extra_seconds else 0.0,
         "wrong_seconds": measure(wrong),
         "wrong": wrong,
-        "missed": subtract(extra, new_removed),
+        "missed": _drop_short(subtract(extra, new_removed), min_len),
         "buckets": buckets,
     }
 
@@ -185,8 +198,8 @@ def main():
     client = make_client() if args.mode == "full" else None
     result = run_cleanup(words, mode=args.mode, cue_word=args.cue_word, audio_path=audio_path,
                          video_duration=duration, pad=args.speech_pad, client=client)
-    new_keep = compute_keep_ranges(pause_cuts, result.time_cuts(), duration)
-    metrics = evaluate(manual_keep, auto_keep, new_keep, duration)
+    new_keep = snap_to_frames(compute_keep_ranges(pause_cuts, result.time_cuts(), duration), fps)
+    metrics = evaluate(manual_keep, auto_keep, new_keep, duration, min_len=1.5 / fps)
     metrics["by_type"] = cuts_breakdown(result.cuts, pause_cuts, metrics["extra"],
                                         complement(manual_keep, duration))
 

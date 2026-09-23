@@ -431,6 +431,7 @@ La pulizia non fa mai fallire il video:
      - **tagli in più** = |A \ M|;
      - suddivisione per durata dei tagli manuali (< 0,3 s, 0,3–1 s, > 1 s) e
        per tipo/origine dei tagli automatici;
+     - i tagli nuovi vengono allineati ai frame e le schegge sotto 1,5 frame (arrotondamenti) sono ignorate;
    - scrive `banco-prova/risultati-<data-ora>.md`.
 3. Taratura di soglie e parametri (anche `--word-gap`/`--speech-pad` se i
    micro-tagli manuali risultano pause da stringere), poi nuova misura.

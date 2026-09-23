@@ -1,4 +1,5 @@
-from tools.evaluate_cleanup import cuts_breakdown, edl_keep_ranges, evaluate, manual_keep_ranges
+from tools.evaluate_cleanup import (cuts_breakdown, edl_keep_ranges, evaluate,
+                                    manual_keep_ranges, snap_to_frames)
 
 
 def test_manual_keep_ranges_reads_video_segments_of_the_right_file():
@@ -30,6 +31,17 @@ def test_evaluate_coverage_and_extra_cuts():
     assert m["wrong_seconds"] == 1.0
     assert [b["label"] for b in m["buckets"]] == ["< 0,3 s", "0,3–1 s", "> 1 s"]
     assert m["buckets"][2]["seconds"] == 2.0
+
+
+def test_snap_to_frames():
+    assert snap_to_frames([(0.004, 1.009)], 100.0) == [(0.0, 1.01)]
+
+
+def test_evaluate_ignores_frame_slivers():
+    m = evaluate(manual_keep=[(0.0, 2.0), (4.0, 10.0)], auto_keep=[(0.0, 10.0)],
+                 new_keep=[(0.0, 1.99), (4.01, 10.0)], duration=10.0, min_len=0.025)
+    assert m["wrong_seconds"] == 0.0
+    assert m["coverage"] == 1.0
 
 
 def test_cuts_breakdown_by_type_and_origin():
