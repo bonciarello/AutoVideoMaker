@@ -1,5 +1,5 @@
 from cleanup_rules import (Candidate, ends_with_ellipsis, find_false_starts,
-                           find_repetitions, split_phrases)
+                           find_repetitions, run_rules, split_phrases)
 from helpers import make_words
 
 
@@ -65,3 +65,13 @@ def test_triple_repetition_keeps_only_the_last():
 
 def test_repetition_across_a_long_pause_is_not_a_stutter():
     assert find_repetitions(make_words("bello. bello davvero", pauses={1: 1.5})) == []
+
+
+def test_repetition_across_sentence_end_is_not_cut():
+    assert find_repetitions(make_words("Parliamo di questo. Questo è il punto.")) == []
+    assert run_rules(make_words("Lo so. Lo so che è difficile."), "rifaccio") == []
+
+
+def test_repetition_after_interrupted_word_is_still_sure():
+    assert find_repetitions(make_words("Però non è... Non è il massimo")) == [
+        Candidate(1, 2, "repetition", True, "gruppo di parole ripetuto")]

@@ -172,6 +172,12 @@ def find_repetitions(words: Words, norm: Optional[List[str]] = None) -> List[Can
                 continue
             if words[i + n]['start'] - words[i + n - 1]['end'] > REPETITION_MAX_GAP:
                 continue
+            # Una parola che chiude la frase («...di questo. Questo è...») non è
+            # un inciampo: la ripetizione a cavallo di due frasi resta. «...» no:
+            # è il segnale della falsa partenza.
+            closing = (words[i + n - 1].get('text') or '').rstrip()
+            if closing.endswith(('.', '?', '!')) and not ends_with_ellipsis(closing):
+                continue
             if n == 1 and first[0] in EMPHATIC_WORDS:
                 continue
             match = n

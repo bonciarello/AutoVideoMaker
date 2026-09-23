@@ -199,6 +199,7 @@ Le soglie sono costanti in testa al modulo, da tarare sul banco di prova.
 - n = 1 con parola enfatica → nessun candidato.
 - **Sicuro** se n ≥ 2 o se è una parola funzione; altrimenti **dubbio**
   («molto molto»).
+- Nessun candidato se la prima occorrenza chiude una frase (. ? !, ma non «...»): «...di questo. Questo è il punto» resta com'è.
 
 ### R4 — take ripetuto (`retake`)
 
