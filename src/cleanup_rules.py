@@ -184,3 +184,121 @@ def find_repetitions(words: Words, norm: Optional[List[str]] = None) -> List[Can
         found.append(Candidate(i, i + match - 1, "repetition", sure, reason))
         i += match
     return found
+
+
+def find_retakes(words: Words, norm: Optional[List[str]] = None,
+                 phrases: Optional[List[Tuple[int, int]]] = None) -> List[Candidate]:
+    """
+    Take ripetuti: due frasi di fila che iniziano con le stesse 3+ parole.
+    Si toglie la prima versione; è sicuro solo se la prima è interrotta o
+    è interamente l'inizio della seconda (altrimenti può essere un'anafora).
+    """
+    norm = norm if norm is not None else normalized(words)
+    phrases = phrases if phrases is not None else split_phrases(words)
+    found = []
+    for (ps, pe), (qs, qe) in zip(phrases, phrases[1:]):
+        if words[qs]['start'] - words[pe]['end'] > RETAKE_MAX_DISTANCE:
+            continue
+        if words[pe]['end'] - words[ps]['start'] > RETAKE_MAX_SECONDS:
+            continue
+        p, q = norm[ps:pe + 1], norm[qs:qe + 1]
+        common = 0
+        while common < len(p) and common < len(q) and p[common] and p[common] == q[common]:
+            common += 1
+        if common < RETAKE_MIN_PREFIX:
+            continue
+        sure = (ends_with_ellipsis(words[pe].get('text', ''))
+                or (common == len(p) and len(q) >= len(p)))
+        found.append(Candidate(ps, pe, "retake", sure, "stessa frase ripresa subito dopo"))
+    return found
+
+
+def _find_restart(norm: List[str], words: Words, before: int, restart: List[str]) -> Optional[int]:
+    """
+    Posizione (< before) da cui iniziano le stesse parole della ripartenza:
+    prima si massimizza quante parole coincidono (da RESTART_MAX a
+    RESTART_MIN), poi si prende la posizione più recente, entro
+    RETAKE_LOOKBACK secondi.
+    """
+    if before <= 0 or len(restart) < RESTART_MIN:
+        return None
+    limit = words[before]['start'] - RETAKE_LOOKBACK
+    for k in range(min(RESTART_MAX, len(restart)), RESTART_MIN - 1, -1):
+        target = restart[:k]
+        for s in range(before - k, -1, -1):
+            if words[s]['start'] < limit:
+                break
+            if norm[s:s + k] == target:
+                return s
+    return None
+
+
+def _phrase_start_before(phrases: List[Tuple[int, int]], index: int) -> int:
+    """Inizio della frase che contiene la parola subito prima di index."""
+    if index <= 0:
+        return 0
+    for s, e in phrases:
+        if s <= index - 1 <= e:
+            return s
+    return index - 1
+
+
+def find_cue_takes(words: Words, cue_word: str, norm: Optional[List[str]] = None,
+                   phrases: Optional[List[Tuple[int, int]]] = None) -> List[Candidate]:
+    """
+    Take segnati a voce: la parola-segnale detta da sola (pausa prima o
+    dopo) scarta il take appena sbagliato. Se le parole dopo la
+    parola-segnale ricalcano parole dette poco prima, il taglio parte da lì
+    ed è sicuro; altrimenti parte dall'inizio della frase precedente ed è
+    dubbio. Le parole di contorno subito prima («ok rifaccio») sono incluse.
+    """
+    cue = normalize_word(cue_word or '')
+    if not cue:
+        return []
+    norm = norm if norm is not None else normalized(words)
+    phrases = phrases if phrases is not None else split_phrases(words)
+    found = []
+    for k, w in enumerate(words):
+        if norm[k] != cue:
+            continue
+        gap_before = w['start'] - words[k - 1]['end'] if k > 0 else float('inf')
+        gap_after = words[k + 1]['start'] - w['end'] if k + 1 < len(words) else float('inf')
+        if gap_before < CUE_PAUSE and gap_after < CUE_PAUSE:
+            continue
+        first = k
+        while (first > 0 and norm[first - 1] in CUE_PREFIX_WORDS
+               and words[first]['start'] - words[first - 1]['end'] <= CUE_PREFIX_MAX_GAP):
+            first -= 1
+        start = _find_restart(norm, words, first, norm[k + 1:k + 1 + RESTART_MAX])
+        if start is not None:
+            found.append(Candidate(start, k, "cue_word", True, f"take segnato con «{cue_word}»"))
+        else:
+            found.append(Candidate(_phrase_start_before(phrases, first), k, "cue_word", False,
+                                   f"«{cue_word}» senza ripartenza riconoscibile"))
+    return found
+
+
+def run_rules(words: Words, cue_word: str = "rifaccio") -> List[Candidate]:
+    """
+    Tutte le regole. Se più regole trovano lo stesso intervallo resta il
+    primo candidato trovato, sicuro se almeno una regola lo considera tale.
+
+    :return: candidati ordinati per (from_id, to_id)
+    """
+    if not words:
+        return []
+    norm = normalized(words)
+    phrases = split_phrases(words)
+    found = (find_cue_takes(words, cue_word, norm, phrases)
+             + find_false_starts(words, norm, phrases)
+             + find_repetitions(words, norm)
+             + find_retakes(words, norm, phrases))
+    unique: Dict[Tuple[int, int], Candidate] = {}
+    for cand in found:
+        key = (cand.from_id, cand.to_id)
+        if key not in unique:
+            unique[key] = cand
+        elif cand.sure and not unique[key].sure:
+            kept = unique[key]
+            unique[key] = Candidate(kept.from_id, kept.to_id, kept.kind, True, kept.reason)
+    return sorted(unique.values(), key=lambda c: (c.from_id, c.to_id))
