@@ -59,7 +59,7 @@ EMPHATIC_WORDS = frozenset({"no", "sì", "piano", "via", "così", "quasi", "bene
 
 # Etichette italiane per prompt, report e marcatori
 KIND_LABELS = {
-    "cue_word": "rifaccio",
+    "cue_word": "parola-segnale",
     "false_start": "falsa partenza",
     "self_correction": "autocorrezione",
     "repetition": "ripetizione",

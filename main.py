@@ -165,7 +165,8 @@ def process_single_video(video_path: str, args: argparse.Namespace, video_num: i
                 words_path, video_path, video_duration, args.transcriber, args.language)
             if cached:
                 log_phase("Trascrizione (riusata da words.json)")
-                print(f"{len(cached['words'])} parole, nessuna nuova trascrizione")
+                print(f"{len(cached['words'])} parole ({cached['transcriber']}, "
+                      f"{cached.get('model') or 'modello non indicato'}), nessuna nuova trascrizione")
                 transcription = cached
             else:
                 log_phase(f"Trascrizione ({args.transcriber})")
@@ -389,6 +390,8 @@ def main():
         print(f"Pulizia take: {args.cleanup}{cue}")
         if args.no_metadata:
             print("Metadati AI: DISABLED")
+        if args.retranscribe:
+            print("Trascrizione: rifatta anche se esiste words.json (--retranscribe)")
     if args.capcut_single_project:
         print("CapCut: progetto combinato unico")
     print("="*100)
