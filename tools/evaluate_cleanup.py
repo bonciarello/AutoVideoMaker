@@ -81,6 +81,7 @@ def evaluate(manual_keep: list, auto_keep: list, new_keep: list, duration: float
     extra_seconds = measure(extra)
     return {
         "extra_seconds": extra_seconds,
+        "extra": extra,
         "covered_seconds": measure(covered),
         "coverage": measure(covered) / extra_seconds if extra_seconds else 0.0,
         "wrong_seconds": measure(wrong),
