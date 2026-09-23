@@ -260,3 +260,96 @@ def source_to_timeline(t: float, keep_ranges: List[Tuple[float, float]]) -> floa
             return acc + (t - s)
         acc += e - s
     return acc
+
+
+def fmt_time(seconds: float) -> str:
+    """Tempo leggibile: mm:ss,d (h:mm:ss,d oltre l'ora)."""
+    tenths = int(round(max(0.0, seconds) * 10))
+    hours, rest = divmod(tenths, 36000)
+    minutes, rest = divmod(rest, 600)
+    secs, tenth = divmod(rest, 10)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d},{tenth}"
+    return f"{minutes:02d}:{secs:02d},{tenth}"
+
+
+def _fmt_seconds(seconds: float) -> str:
+    return f"{seconds:.1f} s".replace(".", ",")
+
+
+def _cell(text: str) -> str:
+    """Testo sicuro dentro una cella di tabella Markdown."""
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def context_text(words, a: int, b: int, around: int = CONTEXT_WORDS) -> str:
+    """Parole tolte in grassetto tra parentesi quadre, con qualche parola di contesto."""
+    before = words_text(words, max(0, a - around), a - 1) if a > 0 else ""
+    after = words_text(words, b + 1, min(len(words) - 1, b + around))
+    text = f"**[{words_text(words, a, b)}]**"
+    if before:
+        text = f"{'…' if a - around > 0 else ''}{before} {text}"
+    if after:
+        text = f"{text} {after}{'…' if b + 1 + around < len(words) else ''}"
+    return text
+
+
+def write_report(output_folder: str, video_name: str, result: CleanupResult, words,
+                 keep_ranges: List[Tuple[float, float]], video_duration: float,
+                 pause_cuts: List[Tuple[float, float]]) -> Tuple[str, str]:
+    """
+    Scrive pulizia.md (da leggere) e pulizia.json (per il banco di prova).
+
+    :param keep_ranges: segmenti tenuti finali (da process_and_export)
+    :param pause_cuts: tagli delle pause, per separare il tempo tolto da pause e pulizia
+    :return: (percorso md, percorso json)
+    """
+    for cut in result.cuts:
+        cut.timeline_time = round(source_to_timeline(cut.end, keep_ranges), 3)
+
+    kept_total = sum(e - s for s, e in keep_ranges)
+    removed_total = max(0.0, video_duration - kept_total)
+    removed_pauses = min(measure(pause_cuts), removed_total)
+    removed_cleanup = removed_total - removed_pauses
+    doubtful = sum(1 for c in result.cuts if not c.sure)
+
+    by_kind: Dict[str, Tuple[int, float]] = {}
+    for c in result.cuts:
+        count, seconds = by_kind.get(c.kind, (0, 0.0))
+        by_kind[c.kind] = (count + 1, seconds + (c.end - c.start))
+
+    mode = "regole + Claude" if result.mode == "full" else "solo regole"
+    lines = [f"# Pulizia take — {video_name}", "", f"Modalità: {mode}", "",
+             "## Riepilogo", "",
+             f"- Durata: {fmt_time(video_duration)} → {fmt_time(kept_total)}",
+             f"- Tolto dalle pause: {fmt_time(removed_pauses)}",
+             f"- Tolto dalla pulizia (oltre alle pause): {fmt_time(removed_cleanup)}",
+             f"- Tagli di pulizia: {len(result.cuts)} (dubbi, con marcatore in CapCut: {doubtful})",
+             ""]
+    if by_kind:
+        lines += ["| Tipo | Tagli | Durata |", "|---|---|---|"]
+        for kind, (count, seconds) in sorted(by_kind.items(), key=lambda kv: -kv[1][1]):
+            lines.append(f"| {KIND_LABELS.get(kind, kind)} | {count} | {_fmt_seconds(seconds)} |")
+        lines.append("")
+    if result.warnings:
+        lines += ["## Avvisi", ""] + [f"- {_cell(w)}" for w in result.warnings] + [""]
+    lines += ["## Tagli", "", "| Tempo | Tipo | Esito | Origine | Testo | Motivo |", "|---|---|---|---|---|---|"]
+    for c in sorted(result.cuts, key=lambda c: c.start):
+        lines.append(f"| {fmt_time(c.timeline_time)} | {KIND_LABELS.get(c.kind, c.kind)} | "
+                     f"{'sicuro' if c.sure else 'dubbio'} | {SOURCE_LABELS.get(c.source, c.source)} | "
+                     f"{_cell(context_text(words, c.from_id, c.to_id))} | {_cell(c.reason)} |")
+    if result.kept:
+        lines += ["", "## Tenuti da Claude", "", "| Tipo | Testo | Motivo |", "|---|---|---|"]
+        for k in result.kept:
+            lines.append(f"| {KIND_LABELS.get(k['kind'], k['kind'])} | "
+                         f"{_cell(context_text(words, k['from_id'], k['to_id']))} | {_cell(k['reason'])} |")
+
+    md_path = os.path.join(output_folder, "pulizia.md")
+    json_path = os.path.join(output_folder, "pulizia.json")
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines) + "\n")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump({"version": 1, "mode": result.mode, "cuts": [asdict(c) for c in result.cuts],
+                   "kept": result.kept, "warnings": result.warnings}, f, ensure_ascii=False, indent=1)
+    print(f"Report pulizia: {md_path}")
+    return md_path, json_path
