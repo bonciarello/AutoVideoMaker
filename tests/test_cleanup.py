@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from cleanup import (Energy, canonical_repetition, cut_end_time, cut_start_time,
-                     marker_title, merge_applied, resolve_outcomes, run_cleanup,
-                     source_to_timeline)
+from cleanup import (Energy, cut_end_time, cut_start_time, marker_title,
+                     merge_applied, reconcile_claude_cuts, resolve_outcomes,
+                     run_cleanup, source_to_timeline)
 from cleanup_llm import LlmResult
 from cleanup_rules import Candidate, normalized
 from helpers import make_words
@@ -151,14 +151,40 @@ class _OneReplyClient:
         self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: reply))
 
 
-def test_canonical_repetition_moves_claude_cut_to_the_first_occurrence():
+def test_reconcile_drops_claude_cuts_inside_a_rule_repetition():
     norm = normalized(make_words("Lui dice che che si è dimesso"))
-    second = Candidate(3, 3, "repetition", True, "", source="claude")
-    both = Candidate(2, 3, "repetition", True, "", source="claude")
-    other = Candidate(4, 5, "false_start", True, "", source="claude")
-    assert (canonical_repetition(second, norm).from_id, canonical_repetition(second, norm).to_id) == (2, 2)
-    assert (canonical_repetition(both, norm).from_id, canonical_repetition(both, norm).to_id) == (2, 2)
-    assert canonical_repetition(other, norm) == other
+    rules = [Candidate(2, 2, "repetition", True, "parola ripetuta")]
+    claude = [Candidate(3, 3, "repetition", True, "", source="claude"),
+              Candidate(2, 3, "repetition", True, "", source="claude"),
+              Candidate(5, 6, "self_correction", True, "", source="claude")]
+    assert reconcile_claude_cuts(claude, rules, norm) == [claude[2]]
+
+
+def test_reconcile_protects_the_kept_occurrence_of_a_group():
+    norm = normalized(make_words("come detto come detto 1º punto"))
+    rules = [Candidate(0, 1, "repetition", True, "gruppo di parole ripetuto")]
+    claude = [Candidate(2, 2, "repetition", True, "", source="claude")]
+    assert reconcile_claude_cuts(claude, rules, norm) == []
+
+
+def test_reconcile_respects_claude_keep_on_a_rule_candidate():
+    norm = normalized(make_words("Questo e molto molto interessante davvero"))
+    rules = [Candidate(2, 2, "repetition", False, "parola ripetuta")]
+    claude = [Candidate(3, 3, "false_start", True, "", source="claude")]
+    assert reconcile_claude_cuts(claude, rules, norm) == []
+
+
+def test_reconcile_never_moves_a_claude_cut():
+    words = make_words("Ok ci vediamo domani. Domani vado a Roma")
+    claude = [Candidate(4, 4, "false_start", True, "", source="claude")]
+    assert reconcile_claude_cuts(claude, [], normalized(words)) == claude
+
+
+def test_reconcile_keeps_one_occurrence_when_claude_cuts_both():
+    words = make_words("sono andato al mare sono andato al mare ieri")
+    claude = [Candidate(0, 7, "retake", True, "", source="claude")]
+    out = reconcile_claude_cuts(claude, [], normalized(words))
+    assert [(c.from_id, c.to_id) for c in out] == [(0, 3)]
 
 
 def test_rule_and_claude_on_the_same_stutter_keep_one_occurrence():
@@ -177,3 +203,12 @@ def test_triple_repetition_still_keeps_the_last_occurrence_with_claude():
     result = run_cleanup(words, mode="full", cue_word="rifaccio", audio_path=None,
                          video_duration=10.0, pad=0.05, client=client)
     assert [(c.from_id, c.to_id) for c in result.cuts] == [(0, 1)]
+
+
+def test_group_stutter_keeps_the_second_occurrence_with_claude():
+    words = make_words("allora come detto come detto il primo punto è semplice oggi")
+    client = _OneReplyClient({"verdicts": [], "cuts": [
+        {"from_id": 3, "to_id": 3, "kind": "repetition", "sure": True, "reason": "inciampo"}]})
+    result = run_cleanup(words, mode="full", cue_word="rifaccio", audio_path=None,
+                         video_duration=10.0, pad=0.05, client=client)
+    assert [(c.from_id, c.to_id) for c in result.cuts] == [(1, 2)]

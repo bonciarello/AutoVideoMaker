@@ -299,10 +299,12 @@ Prompt di sistema (stabile, in italiano):
 
 - Tagli sovrapposti o adiacenti si uniscono a livello di parola; il taglio
   unito è sicuro solo se lo sono tutti i componenti.
-- I tagli di Claude su una ripetizione vengono prima spostati sulla prima
-  occorrenza (come le regole): se tolgono «X X» per intero restano con la
-  sola prima X, se tolgono la seconda X passano alla prima. Così un
-  inciampo non perde mai entrambe le occorrenze.
+- Prima della fusione i tagli di Claude vengono riconciliati con le regole,
+  senza mai spostarli: un taglio di Claude che sta tutto dentro una
+  ripetizione già gestita da una regola (il candidato più la sua gemella
+  subito dopo) si ignora — decide la regola, o il «tieni» di Claude; un
+  taglio di Claude che toglie «X X» per intero resta sulla sola prima X.
+  Così un inciampo non perde mai entrambe le occorrenze.
 - Senza chiave Anthropic o con `--cleanup rules`: solo regole, i dubbi
   applicati con marcatore.
 

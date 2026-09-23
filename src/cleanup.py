@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from cleanup_llm import LlmResult, review_with_claude
-from cleanup_rules import KIND_LABELS, REPETITION_MAX_N, Candidate, normalized, run_rules
+from cleanup_rules import KIND_LABELS, Candidate, normalized, run_rules
 from intervals import measure
 
 TOUCH_GAP = 0.02        # pausa (s) sotto la quale due parole sono "attaccate"
@@ -107,26 +107,41 @@ def cut_end_time(words, b: int, pad: float, energy: Optional[Energy], video_dura
     return _quietest(energy, mid - TOUCH_WINDOW, mid + TOUCH_WINDOW)
 
 
-def canonical_repetition(cand: Candidate, norm: List[str]) -> Candidate:
+def repetition_regions(rule_cands: List[Candidate], norm: List[str]) -> List[Tuple[int, int]]:
     """
-    Un taglio su una ripetizione deve togliere una sola occorrenza, la prima,
-    come fanno le regole. Così il taglio di Claude e quello delle regole sullo
-    stesso inciampo coincidono invece di togliere entrambe le occorrenze
-    («Lui dice [che che] si è dimesso» deve lasciare un «che»).
+    Zone delle ripetizioni gestite dalle regole: il candidato (la prima
+    occorrenza) più la sua gemella subito dopo, quando le parole coincidono.
     """
-    a, b = cand.from_id, cand.to_id
-    n = b - a + 1
-    seg = norm[a:b + 1]
-    if not all(seg):
-        return cand
-    half = n // 2
-    # tolte entrambe le occorrenze («che che»): resta la seconda
-    if n % 2 == 0 and half <= REPETITION_MAX_N and seg[:half] == seg[half:]:
-        return replace(cand, to_id=a + half - 1)
-    # tolta la seconda occorrenza: si toglie la prima, come le regole
-    if n <= REPETITION_MAX_N and a - n >= 0 and norm[a - n:a] == seg:
-        return replace(cand, from_id=a - n, to_id=a - 1)
-    return cand
+    regions = []
+    for cand in rule_cands:
+        n = cand.to_id - cand.from_id + 1
+        seg = norm[cand.from_id:cand.to_id + 1]
+        if all(seg) and norm[cand.to_id + 1:cand.to_id + 1 + n] == seg:
+            regions.append((cand.from_id, cand.to_id + n))
+    return regions
+
+
+def reconcile_claude_cuts(llm_cuts: List[Candidate], rule_cands: List[Candidate],
+                          norm: List[str]) -> List[Candidate]:
+    """
+    Riconcilia i tagli di Claude con le regole, perché un inciampo non perda
+    mai entrambe le occorrenze. Un taglio di Claude non viene mai spostato:
+    - se sta tutto dentro una ripetizione già gestita da una regola (candidato
+      più gemella) si ignora: decide la regola, o il «tieni» di Claude;
+    - se toglie «X X» per intero resta sulla sola prima X.
+    """
+    regions = repetition_regions(rule_cands, norm)
+    reconciled = []
+    for cand in llm_cuts:
+        if any(start <= cand.from_id and cand.to_id <= end for start, end in regions):
+            continue
+        n = cand.to_id - cand.from_id + 1
+        seg = norm[cand.from_id:cand.to_id + 1]
+        half = n // 2
+        if all(seg) and n % 2 == 0 and seg[:half] == seg[half:]:
+            cand = replace(cand, to_id=cand.from_id + half - 1)
+        reconciled.append(cand)
+    return reconciled
 
 
 def resolve_outcomes(rule_cands: List[Candidate], dubious: List[Candidate],
@@ -237,10 +252,9 @@ def run_cleanup(words, mode: str, cue_word: str, audio_path: Optional[str],
         else:
             llm = review_with_claude(words, dubious, client)
             result.warnings.extend(llm.warnings)
-            # I tagli di Claude sulle ripetizioni tolgono la prima occorrenza,
-            # come le regole: un inciampo non perde mai entrambe le occorrenze
-            norm = normalized(words)
-            llm.cuts = [canonical_repetition(c, norm) for c in llm.cuts]
+            # Un inciampo non perde mai entrambe le occorrenze: i tagli di
+            # Claude dentro una ripetizione già gestita dalle regole si ignorano
+            llm.cuts = reconcile_claude_cuts(llm.cuts, rule_cands, normalized(words))
 
     applied, kept = resolve_outcomes(rule_cands, dubious, llm)
 
