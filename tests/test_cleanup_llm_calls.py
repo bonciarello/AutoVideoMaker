@@ -80,6 +80,37 @@ def test_review_survives_malformed_response():
     assert result.failed_windows == 1
 
 
+class BlockClient:
+    """Risponde a ogni blocco con la sua risposta, qualunque sia l'ordine delle chiamate parallele."""
+
+    def __init__(self, replies_by_block):
+        self.replies = replies_by_block
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        text = kwargs["messages"][0]["content"]
+        block = int(text.split("Blocco ", 1)[1].split("/", 1)[0])
+        return _reply(self.replies[block])
+
+
+def _cut(word, reason):
+    return {"from_id": word, "to_id": word, "kind": "repetition", "sure": True, "reason": reason}
+
+
+def test_review_lets_one_block_decide_each_shared_word():
+    # 1700 frasi di una parola: blocchi 0–1499 e 1350–1699, zona condivisa 1350–1499.
+    # «artificiale artificiale» (1400–1401) sta nella prima metà della zona, 1470 nella seconda.
+    tokens = [f"p{i}." for i in range(1700)]
+    tokens[1400], tokens[1401] = "artificiale", "artificiale."
+    words = make_words(" ".join(tokens))
+    client = BlockClient({
+        1: {"verdicts": [], "cuts": [_cut(1401, "blocco 1"), _cut(1470, "blocco 1")]},
+        2: {"verdicts": [], "cuts": [_cut(1400, "blocco 2"), _cut(1470, "blocco 2")]}})
+    result = review_with_claude(words, [], client)
+    assert result.cuts == [Candidate(1401, 1401, "repetition", True, "blocco 1", source="claude"),
+                           Candidate(1470, 1470, "repetition", True, "blocco 2", source="claude")]
+
+
 def test_review_warns_about_candidates_outside_every_block():
     words = make_words(" ".join(f"p{i}." for i in range(1700)))
     dubious = [Candidate(1300, 1600, "retake", False, "")]

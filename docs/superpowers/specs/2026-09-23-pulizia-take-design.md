@@ -228,6 +228,11 @@ trovato), sicuro se almeno una delle regole lo considera sicuro. I candidati
 - Ogni candidato dubbio va al primo blocco che lo contiene per intero (con la
   sovrapposizione un candidato vicino al confine può stare in due blocchi).
 - Blocchi elaborati in parallelo (massimo 3); risultati uniti per unione.
+- Nella zona condivisa ogni parola la decide un blocco solo: il confine sta a
+  metà della sovrapposizione e i tagli nuovi di un blocco che iniziano oltre
+  il suo confine si scartano (per lui quelle parole sono solo contesto).
+  Altrimenti i due blocchi possono togliere ciascuno una delle due occorrenze
+  di un inciampo («artificiale artificiale», trovato alla taratura del 23/09).
 
 ### Input
 

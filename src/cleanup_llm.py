@@ -123,6 +123,21 @@ def make_windows(phrases: List[Tuple[int, int]], n_words: int,
         first_phrase = next_phrase
 
 
+def owned_ranges(windows: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """
+    Parole su cui valgono i tagli nuovi di ogni blocco: la zona condivisa con
+    il blocco successivo si divide a metà, così ogni parola la decide un
+    blocco solo e l'altro la vede come contesto. Senza questo i due blocchi
+    possono togliere ciascuno una delle due occorrenze di un inciampo.
+    """
+    owned = []
+    for idx, (first, last) in enumerate(windows):
+        lo = first if idx == 0 else owned[-1][1] + 1
+        hi = (windows[idx + 1][0] + last) // 2 if idx + 1 < len(windows) else last
+        owned.append((lo, hi))
+    return owned
+
+
 def assign_candidates(windows: List[Tuple[int, int]], numbered: Numbered) -> Dict[int, Numbered]:
     """
     Ogni candidato va al primo blocco che lo contiene per intero; se nessun
@@ -269,6 +284,7 @@ def review_with_claude(words, dubious: List[Candidate], client, max_workers: int
             except (anthropic.APIError, WindowRejected, KeyError, TypeError, ValueError) as e:
                 errors[idx] = e
 
+    owned = owned_ranges(windows)
     result = LlmResult()
     for idx in range(len(windows)):
         label = f"blocco {idx + 1}/{len(windows)}"
@@ -278,7 +294,8 @@ def review_with_claude(words, dubious: List[Candidate], client, max_workers: int
             continue
         verdicts, cuts, warnings = outcomes[idx]
         result.verdicts.update(verdicts)
-        result.cuts.extend(cuts)
+        lo, hi = owned[idx]
+        result.cuts.extend(c for c in cuts if lo <= c.from_id <= hi)
         result.warnings.extend(f"{label}: {w}" for w in warnings)
     if unassigned:
         result.warnings.append(f"{unassigned} candidati dubbi a cavallo tra due blocchi: "
