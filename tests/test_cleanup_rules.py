@@ -57,6 +57,12 @@ def test_repeated_group_of_words_is_sure():
         Candidate(0, 2, "repetition", True, "gruppo di parole ripetuto")]
 
 
+def test_repeated_group_after_comma_is_left_to_claude():
+    # «è una hit, è una hit.» può essere enfasi voluta: il taglio resta dubbio
+    [cand] = find_repetitions(make_words("Qwen è una hit, è una hit."))
+    assert (cand.from_id, cand.to_id, cand.sure) == (1, 3, False)
+
+
 def test_triple_repetition_keeps_only_the_last():
     assert find_repetitions(make_words("che che che bello")) == [
         Candidate(0, 0, "repetition", True, "parola ripetuta"),

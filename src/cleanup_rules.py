@@ -157,7 +157,8 @@ def find_repetitions(words: Words, norm: Optional[List[str]] = None) -> List[Can
     """
     Parole (o gruppi fino a 3 parole) ripetute di fila: si toglie la prima
     occorrenza. Sicuro per gruppi e parole funzione, dubbio per le altre
-    parole («molto molto»); le ripetizioni enfatiche («no no») restano.
+    parole («molto molto») e per i gruppi chiusi da una virgola («è una
+    hit, è una hit»); le ripetizioni enfatiche («no no») restano.
     """
     norm = norm if norm is not None else normalized(words)
     found = []
@@ -185,8 +186,15 @@ def find_repetitions(words: Words, norm: Optional[List[str]] = None) -> List[Can
         if not match:
             i += 1
             continue
-        sure = match > 1 or norm[i] in FUNCTION_WORDS
-        reason = "gruppo di parole ripetuto" if match > 1 else "parola ripetuta"
+        if match > 1:
+            # Un gruppo chiuso da una virgola («è una hit, è una hit») può
+            # essere enfasi voluta: lo decide Claude.
+            after_comma = (words[i + match - 1].get('text') or '').rstrip().endswith(',')
+            sure = not after_comma
+            reason = "gruppo ripetuto dopo una virgola" if after_comma else "gruppo di parole ripetuto"
+        else:
+            sure = norm[i] in FUNCTION_WORDS
+            reason = "parola ripetuta"
         found.append(Candidate(i, i + match - 1, "repetition", sure, reason))
         i += match
     return found
